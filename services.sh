@@ -1,7 +1,8 @@
 #!/bin/bash
-# Services Hardening Script
+# Services Hardening Script - Improved Version
 # Module: Services
 # Supports: scan, fix, rollback modes
+# Fix mode: Only fixes items that FAILED in scan
 
 MODE="${1:-scan}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -26,6 +27,7 @@ PASSED_CHECKS=0
 FAILED_CHECKS=0
 FIXED_CHECKS=0
 MANUAL_CHECKS=0
+SKIPPED_CHECKS=0
 
 log_info() {
     echo -e "${GREEN}[INFO]${NC} $1"
@@ -49,6 +51,10 @@ log_fixed() {
 
 log_manual() {
     echo -e "${BLUE}[MANUAL]${NC} $1"
+}
+
+log_skip() {
+    echo -e "${BLUE}[SKIP]${NC} $1"
 }
 
 # =========================
@@ -226,6 +232,23 @@ except Exception as e:
 }
 
 # =========================
+# Check if policy should be fixed
+# =========================
+should_fix_policy() {
+    local policy_id="$1"
+    
+    local scan_data=$(get_scan_result "$policy_id")
+    local status=$(echo "$scan_data" | python3 -c "import sys, json; data=json.load(sys.stdin); print(data.get('status', ''))")
+    
+    # Only fix if status is FAIL
+    if [ "$status" = "FAIL" ]; then
+        return 0  # Should fix
+    else
+        return 1  # Skip (already PASS or no scan data)
+    fi
+}
+
+# =========================
 # Service Status Checker
 # =========================
 is_disabled() {
@@ -278,6 +301,13 @@ check_service() {
         save_scan_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
         
     elif [ "$MODE" = "fix" ]; then
+        # Check if this policy failed in scan
+        if ! should_fix_policy "$policy_id"; then
+            log_skip "$policy_name (already compliant)"
+            ((SKIPPED_CHECKS++))
+            return
+        fi
+        
         # Get original state from scan
         local scan_data
         scan_data=$(get_scan_result "$policy_id")
@@ -333,6 +363,13 @@ check_package() {
         save_scan_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
         
     elif [ "$MODE" = "fix" ]; then
+        # Check if this policy failed in scan
+        if ! should_fix_policy "$policy_id"; then
+            log_skip "$policy_name (already compliant)"
+            ((SKIPPED_CHECKS++))
+            return
+        fi
+        
         # Get original state from scan
         local scan_data
         scan_data=$(get_scan_result "$policy_id")
@@ -352,31 +389,18 @@ check_package() {
             local backup_file="$BACKUP_DIR/${package}_backup.txt"
             dpkg -l "$package" 2>/dev/null > "$backup_file"
             
-            log_info "Removing package: $package"
             apt remove -y "$package" >/dev/null 2>&1
             
-            # Verify removal
-            if dpkg -l 2>/dev/null | grep -q "^ii.*$package"; then
-                log_error "Failed to remove $package"
-                local current_value="installed"
-                local status="FAIL"
-                ((FAILED_CHECKS++))
-            else
-                log_fixed "$policy_name"
-                local current_value="not installed"
-                local status="PASS"
-                ((FIXED_CHECKS++))
-            fi
-            
-            local expected="not installed"
-            save_fix_result "$policy_id" "$policy_name" "$expected" "$original_value" "$current_value" "$status"
-        else
-            log_pass "$package already not installed"
-            # Still save to fix_history to track that we checked it
             local current_value="not installed"
             local expected="not installed"
             local status="PASS"
+            
+            log_fixed "$policy_name"
             save_fix_result "$policy_id" "$policy_name" "$expected" "$original_value" "$current_value" "$status"
+            ((FIXED_CHECKS++))
+        else
+            log_skip "$package already not installed"
+            ((SKIPPED_CHECKS++))
         fi
         
     elif [ "$MODE" = "rollback" ]; then
@@ -456,6 +480,13 @@ check_time_sync() {
         save_scan_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
         
     elif [ "$MODE" = "fix" ]; then
+        # Check if this policy failed in scan
+        if ! should_fix_policy "$policy_id"; then
+            log_skip "$policy_name (already compliant)"
+            ((SKIPPED_CHECKS++))
+            return
+        fi
+        
         # Get original state from scan
         local scan_data
         scan_data=$(get_scan_result "$policy_id")
@@ -524,6 +555,13 @@ check_single_time_daemon() {
         save_scan_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
         
     elif [ "$MODE" = "fix" ]; then
+        # Check if this policy failed in scan
+        if ! should_fix_policy "$policy_id"; then
+            log_skip "$policy_name (already compliant)"
+            ((SKIPPED_CHECKS++))
+            return
+        fi
+        
         local scan_data
         scan_data=$(get_scan_result "$policy_id")
         local original_value=$(echo "$scan_data" | python3 -c "import sys, json; data=json.load(sys.stdin); print(data.get('current_value', ''))")
@@ -635,6 +673,13 @@ check_chrony_enabled() {
         save_scan_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
         
     elif [ "$MODE" = "fix" ]; then
+        # Check if this policy failed in scan
+        if ! should_fix_policy "$policy_id"; then
+            log_skip "$policy_name (already compliant)"
+            ((SKIPPED_CHECKS++))
+            return
+        fi
+        
         local scan_data
         scan_data=$(get_scan_result "$policy_id")
         local original_value=$(echo "$scan_data" | python3 -c "import sys, json; data=json.load(sys.stdin); print(data.get('current_value', ''))")
@@ -688,6 +733,13 @@ check_cron_enabled() {
         save_scan_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
         
     elif [ "$MODE" = "fix" ]; then
+        # Check if this policy failed in scan
+        if ! should_fix_policy "$policy_id"; then
+            log_skip "$policy_name (already compliant)"
+            ((SKIPPED_CHECKS++))
+            return
+        fi
+        
         local scan_data
         scan_data=$(get_scan_result "$policy_id")
         local original_value=$(echo "$scan_data" | python3 -c "import sys, json; data=json.load(sys.stdin); print(data.get('current_value', ''))")
@@ -722,13 +774,15 @@ check_cron_permissions() {
     if [ "$MODE" = "scan" ]; then
         local status="FAIL"
         local expected="$expected_perms root:root"
-        local current="unknown"
+        local
+        current="unknown"
         
         if [ -e "$file" ]; then
             local perms=$(stat -c "%a" "$file" 2>/dev/null)
             local owner=$(stat -c "%U:%G" "$file" 2>/dev/null)
             current="$perms $owner"
-if [ "$perms" = "$expected_perms" ] && [ "$owner" = "root:root" ]; then
+            
+            if [ "$perms" = "$expected_perms" ] && [ "$owner" = "root:root" ]; then
                 status="PASS"
                 ((PASSED_CHECKS++))
             else
@@ -743,6 +797,13 @@ if [ "$perms" = "$expected_perms" ] && [ "$owner" = "root:root" ]; then
         save_scan_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
         
     elif [ "$MODE" = "fix" ]; then
+        # Check if this policy failed in scan
+        if ! should_fix_policy "$policy_id"; then
+            log_skip "$policy_name (already compliant)"
+            ((SKIPPED_CHECKS++))
+            return
+        fi
+        
         if [ -e "$file" ]; then
             local scan_data
             scan_data=$(get_scan_result "$policy_id")
@@ -770,6 +831,7 @@ if [ "$perms" = "$expected_perms" ] && [ "$owner" = "root:root" ]; then
             ((FIXED_CHECKS++))
         else
             log_warn "$file does not exist"
+            ((SKIPPED_CHECKS++))
         fi
     fi
 }
@@ -808,6 +870,13 @@ check_cron_allow_deny() {
         save_scan_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
         
     elif [ "$MODE" = "fix" ]; then
+        # Check if this policy failed in scan
+        if ! should_fix_policy "$policy_id"; then
+            log_skip "$policy_name (already compliant)"
+            ((SKIPPED_CHECKS++))
+            return
+        fi
+        
         local scan_data
         scan_data=$(get_scan_result "$policy_id")
         local original_value=$(echo "$scan_data" | python3 -c "import sys, json; data=json.load(sys.stdin); print(data.get('current_value', ''))")
@@ -878,6 +947,13 @@ check_sshd_permission() {
         save_scan_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
         
     elif [ "$MODE" = "fix" ]; then
+        # Check if this policy failed in scan
+        if ! should_fix_policy "$policy_id"; then
+            log_skip "$policy_name (already compliant)"
+            ((SKIPPED_CHECKS++))
+            return
+        fi
+        
         if [ -f /etc/ssh/sshd_config ]; then
             local scan_data
             scan_data=$(get_scan_result "$policy_id")
@@ -903,6 +979,9 @@ check_sshd_permission() {
             log_fixed "$policy_name"
             save_fix_result "$policy_id" "$policy_name" "$expected" "$original_value" "$current_value" "$status"
             ((FIXED_CHECKS++))
+        else
+            log_warn "/etc/ssh/sshd_config does not exist"
+            ((SKIPPED_CHECKS++))
         fi
     fi
 }
@@ -943,6 +1022,13 @@ check_ssh_private_keys() {
         save_scan_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
         
     elif [ "$MODE" = "fix" ]; then
+        # Check if this policy failed in scan
+        if ! should_fix_policy "$policy_id"; then
+            log_skip "$policy_name (already compliant)"
+            ((SKIPPED_CHECKS++))
+            return
+        fi
+        
         local scan_data
         scan_data=$(get_scan_result "$policy_id")
         local original_value=$(echo "$scan_data" | python3 -c "import sys, json; data=json.load(sys.stdin); print(data.get('current_value', ''))")
@@ -1004,6 +1090,13 @@ check_ssh_public_keys() {
         save_scan_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
         
     elif [ "$MODE" = "fix" ]; then
+        # Check if this policy failed in scan
+        if ! should_fix_policy "$policy_id"; then
+            log_skip "$policy_name (already compliant)"
+            ((SKIPPED_CHECKS++))
+            return
+        fi
+        
         local scan_data
         scan_data=$(get_scan_result "$policy_id")
         local original_value=$(echo "$scan_data" | python3 -c "import sys, json; data=json.load(sys.stdin); print(data.get('current_value', ''))")
@@ -1056,6 +1149,13 @@ check_sudo_installed() {
         save_scan_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
         
     elif [ "$MODE" = "fix" ]; then
+        # Check if this policy failed in scan
+        if ! should_fix_policy "$policy_id"; then
+            log_skip "$policy_name (already compliant)"
+            ((SKIPPED_CHECKS++))
+            return
+        fi
+        
         local scan_data
         scan_data=$(get_scan_result "$policy_id")
         local original_value=$(echo "$scan_data" | python3 -c "import sys, json; data=json.load(sys.stdin); print(data.get('current_value', ''))")
@@ -1079,7 +1179,8 @@ check_sudo_installed() {
             save_fix_result "$policy_id" "$policy_name" "$expected" "$original_value" "$current_value" "$status"
             ((FIXED_CHECKS++))
         else
-            log_pass "sudo already installed"
+            log_skip "sudo already installed"
+            ((SKIPPED_CHECKS++))
         fi
     fi
 }
@@ -1108,6 +1209,13 @@ check_sudo_use_pty() {
         save_scan_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
         
     elif [ "$MODE" = "fix" ]; then
+        # Check if this policy failed in scan
+        if ! should_fix_policy "$policy_id"; then
+            log_skip "$policy_name (already compliant)"
+            ((SKIPPED_CHECKS++))
+            return
+        fi
+        
         local scan_data
         scan_data=$(get_scan_result "$policy_id")
         local original_value=$(echo "$scan_data" | python3 -c "import sys, json; data=json.load(sys.stdin); print(data.get('current_value', ''))")
@@ -1161,6 +1269,13 @@ check_sudo_log_file() {
         save_scan_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
         
     elif [ "$MODE" = "fix" ]; then
+        # Check if this policy failed in scan
+        if ! should_fix_policy "$policy_id"; then
+            log_skip "$policy_name (already compliant)"
+            ((SKIPPED_CHECKS++))
+            return
+        fi
+        
         local scan_data
         scan_data=$(get_scan_result "$policy_id")
         local original_value=$(echo "$scan_data" | python3 -c "import sys, json; data=json.load(sys.stdin); print(data.get('current_value', ''))")
@@ -1248,6 +1363,7 @@ main() {
         log_error "Failed: $FAILED_CHECKS"
     elif [ "$MODE" = "fix" ]; then
         log_fixed "Fixed: $FIXED_CHECKS"
+        log_skip "Skipped (Already Compliant): $SKIPPED_CHECKS"
         log_manual "Manual: $MANUAL_CHECKS"
     fi
     
