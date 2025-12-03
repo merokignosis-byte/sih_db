@@ -714,3 +714,531 @@ check_cron_permissions() {
             local perms=$(stat -c "%a" "$file" 2>/dev/null)
             local owner=$(stat -c "%U:%G" "$file" 2>/dev/null)
             current="$perms $owner"
+if [ "$perms" = "$expected_perms" ] && [ "$owner" = "root:root" ]; then
+                status="PASS"
+                ((PASSED_CHECKS++))
+            else
+                ((FAILED_CHECKS++))
+            fi
+        else
+            current="file not found"
+            ((FAILED_CHECKS++))
+        fi
+        
+        print_check_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
+        save_scan_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
+        
+    elif [ "$MODE" = "fix" ]; then
+        if [ -e "$file" ]; then
+            local scan_data
+            scan_data=$(get_scan_result "$policy_id")
+            local original_value=$(echo "$scan_data" | python3 -c "import sys, json; data=json.load(sys.stdin); print(data.get('current_value', ''))")
+            
+            if [ -z "$original_value" ]; then
+                local perms=$(stat -c "%a" "$file" 2>/dev/null)
+                local owner=$(stat -c "%U:%G" "$file" 2>/dev/null)
+                original_value="$perms $owner"
+            fi
+            
+            # Backup current permissions
+            local backup_file="$BACKUP_DIR/$(basename $file)_perms.txt"
+            stat -c "%a %U:%G" "$file" > "$backup_file"
+            
+            chmod "$expected_perms" "$file"
+            chown root:root "$file"
+            
+            local current_value="$expected_perms root:root"
+            local expected="$expected_perms root:root"
+            local status="PASS"
+            
+            log_fixed "$policy_name"
+            save_fix_result "$policy_id" "$policy_name" "$expected" "$original_value" "$current_value" "$status"
+            ((FIXED_CHECKS++))
+        else
+            log_warn "$file does not exist"
+        fi
+    fi
+}
+
+check_cron_allow_deny() {
+    local policy_id="SRV-3.f.vii"
+    local policy_name="Ensure at/cron is restricted to authorized users"
+    
+    ((TOTAL_CHECKS++))
+    
+    if [ "$MODE" = "scan" ]; then
+        local status="FAIL"
+        local expected="cron.allow exists, deny removed"
+        local current="unknown"
+        
+        local cron_allow_exists=false
+        local cron_deny_exists=false
+        local at_allow_exists=false
+        local at_deny_exists=false
+        
+        [ -f /etc/cron.allow ] && cron_allow_exists=true
+        [ -f /etc/cron.deny ] && cron_deny_exists=true
+        [ -f /etc/at.allow ] && at_allow_exists=true
+        [ -f /etc/at.deny ] && at_deny_exists=true
+        
+        if $cron_allow_exists && ! $cron_deny_exists && $at_allow_exists && ! $at_deny_exists; then
+            current="properly configured"
+            status="PASS"
+            ((PASSED_CHECKS++))
+        else
+            current="cron.allow:$cron_allow_exists cron.deny:$cron_deny_exists at.allow:$at_allow_exists at.deny:$at_deny_exists"
+            ((FAILED_CHECKS++))
+        fi
+        
+        print_check_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
+        save_scan_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
+        
+    elif [ "$MODE" = "fix" ]; then
+        local scan_data
+        scan_data=$(get_scan_result "$policy_id")
+        local original_value=$(echo "$scan_data" | python3 -c "import sys, json; data=json.load(sys.stdin); print(data.get('current_value', ''))")
+        
+        if [ -z "$original_value" ]; then
+            original_value="cron.allow:$([[ -f /etc/cron.allow ]] && echo true || echo false) cron.deny:$([[ -f /etc/cron.deny ]] && echo true || echo false)"
+        fi
+        
+        # Backup existing files
+        [ -f /etc/cron.deny ] && cp /etc/cron.deny "$BACKUP_DIR/cron.deny.$(date +%Y%m%d_%H%M%S)"
+        [ -f /etc/at.deny ] && cp /etc/at.deny "$BACKUP_DIR/at.deny.$(date +%Y%m%d_%H%M%S)"
+        [ -f /etc/cron.allow ] && cp /etc/cron.allow "$BACKUP_DIR/cron.allow.$(date +%Y%m%d_%H%M%S)"
+        [ -f /etc/at.allow ] && cp /etc/at.allow "$BACKUP_DIR/at.allow.$(date +%Y%m%d_%H%M%S)"
+        
+        # Remove deny files
+        rm -f /etc/cron.deny
+        rm -f /etc/at.deny
+        
+        # Create allow files if they don't exist
+        touch /etc/cron.allow
+        touch /etc/at.allow
+        chmod 640 /etc/cron.allow
+        chmod 640 /etc/at.allow
+        chown root:root /etc/cron.allow
+        chown root:root /etc/at.allow
+        
+        local current_value="properly configured"
+        local expected="cron.allow exists, deny removed"
+        local status="PASS"
+        
+        log_fixed "$policy_name"
+        save_fix_result "$policy_id" "$policy_name" "$expected" "$original_value" "$current_value" "$status"
+        ((FIXED_CHECKS++))
+    fi
+}
+
+# =========================
+# SSH Server Configuration
+# =========================
+check_sshd_permission() {
+    local policy_id="SRV-3.g.i"
+    local policy_name="Ensure permissions on /etc/ssh/sshd_config are configured"
+    
+    ((TOTAL_CHECKS++))
+    
+    if [ "$MODE" = "scan" ]; then
+        local status="FAIL"
+        local expected="600 root:root"
+        local current="unknown"
+        
+        if [ -f /etc/ssh/sshd_config ]; then
+            local perms=$(stat -c "%a" /etc/ssh/sshd_config 2>/dev/null)
+            local owner=$(stat -c "%U:%G" /etc/ssh/sshd_config 2>/dev/null)
+            current="$perms $owner"
+            
+            if [ "$perms" = "600" ] && [ "$owner" = "root:root" ]; then
+                status="PASS"
+                ((PASSED_CHECKS++))
+            else
+                ((FAILED_CHECKS++))
+            fi
+        else
+            current="file not found"
+            ((FAILED_CHECKS++))
+        fi
+        
+        print_check_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
+        save_scan_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
+        
+    elif [ "$MODE" = "fix" ]; then
+        if [ -f /etc/ssh/sshd_config ]; then
+            local scan_data
+            scan_data=$(get_scan_result "$policy_id")
+            local original_value=$(echo "$scan_data" | python3 -c "import sys, json; data=json.load(sys.stdin); print(data.get('current_value', ''))")
+            
+            if [ -z "$original_value" ]; then
+                local perms=$(stat -c "%a" /etc/ssh/sshd_config 2>/dev/null)
+                local owner=$(stat -c "%U:%G" /etc/ssh/sshd_config 2>/dev/null)
+                original_value="$perms $owner"
+            fi
+            
+            # Backup
+            cp /etc/ssh/sshd_config "$BACKUP_DIR/sshd_config.$(date +%Y%m%d_%H%M%S)"
+            stat -c "%a %U:%G" /etc/ssh/sshd_config > "$BACKUP_DIR/sshd_config_perms.txt"
+            
+            chmod 600 /etc/ssh/sshd_config
+            chown root:root /etc/ssh/sshd_config
+            
+            local current_value="600 root:root"
+            local expected="600 root:root"
+            local status="PASS"
+            
+            log_fixed "$policy_name"
+            save_fix_result "$policy_id" "$policy_name" "$expected" "$original_value" "$current_value" "$status"
+            ((FIXED_CHECKS++))
+        fi
+    fi
+}
+
+check_ssh_private_keys() {
+    local policy_id="SRV-3.g.ii"
+    local policy_name="Ensure permissions on SSH private host key files are configured"
+    
+    ((TOTAL_CHECKS++))
+    
+    if [ "$MODE" = "scan" ]; then
+        local status="PASS"
+        local expected="600 root:root"
+        local current="checking..."
+        local issues=""
+        
+        while IFS= read -r file; do
+            if [ -f "$file" ]; then
+                local perms=$(stat -c "%a" "$file" 2>/dev/null)
+                local owner=$(stat -c "%U:%G" "$file" 2>/dev/null)
+                
+                if [ "$perms" != "600" ] || [ "$owner" != "root:root" ]; then
+                    issues="$issues $file($perms $owner)"
+                    status="FAIL"
+                fi
+            fi
+        done < <(find /etc/ssh -xdev -type f -name 'ssh_host_*_key' 2>/dev/null)
+        
+        if [ "$status" = "PASS" ]; then
+            current="all private keys properly secured"
+            ((PASSED_CHECKS++))
+        else
+            current="issues found:$issues"
+            ((FAILED_CHECKS++))
+        fi
+        
+        print_check_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
+        save_scan_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
+        
+    elif [ "$MODE" = "fix" ]; then
+        local scan_data
+        scan_data=$(get_scan_result "$policy_id")
+        local original_value=$(echo "$scan_data" | python3 -c "import sys, json; data=json.load(sys.stdin); print(data.get('current_value', ''))")
+        
+        while IFS= read -r file; do
+            if [ -f "$file" ]; then
+                # Backup
+                local backup_file="$BACKUP_DIR/$(basename $file)_perms.txt"
+                stat -c "%a %U:%G" "$file" > "$backup_file"
+                
+                chmod 600 "$file"
+                chown root:root "$file"
+            fi
+        done < <(find /etc/ssh -xdev -type f -name 'ssh_host_*_key' 2>/dev/null)
+        
+        local current_value="all private keys properly secured"
+        local expected="600 root:root"
+        local status="PASS"
+        
+        log_fixed "$policy_name"
+        save_fix_result "$policy_id" "$policy_name" "$expected" "$original_value" "$current_value" "$status"
+        ((FIXED_CHECKS++))
+    fi
+}
+
+check_ssh_public_keys() {
+    local policy_id="SRV-3.g.iii"
+    local policy_name="Ensure permissions on SSH public host key files are configured"
+    
+    ((TOTAL_CHECKS++))
+    
+    if [ "$MODE" = "scan" ]; then
+        local status="PASS"
+        local expected="644 root:root"
+        local current="checking..."
+        local issues=""
+        
+        while IFS= read -r file; do
+            if [ -f "$file" ]; then
+                local perms=$(stat -c "%a" "$file" 2>/dev/null)
+                local owner=$(stat -c "%U:%G" "$file" 2>/dev/null)
+                
+                if [ "$perms" != "644" ] || [ "$owner" != "root:root" ]; then
+                    issues="$issues $file($perms $owner)"
+                    status="FAIL"
+                fi
+            fi
+        done < <(find /etc/ssh -xdev -type f -name 'ssh_host_*_key.pub' 2>/dev/null)
+        
+        if [ "$status" = "PASS" ]; then
+            current="all public keys properly configured"
+            ((PASSED_CHECKS++))
+        else
+            current="issues found:$issues"
+            ((FAILED_CHECKS++))
+        fi
+        
+        print_check_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
+        save_scan_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
+        
+    elif [ "$MODE" = "fix" ]; then
+        local scan_data
+        scan_data=$(get_scan_result "$policy_id")
+        local original_value=$(echo "$scan_data" | python3 -c "import sys, json; data=json.load(sys.stdin); print(data.get('current_value', ''))")
+        
+        while IFS= read -r file; do
+            if [ -f "$file" ]; then
+                # Backup
+                local backup_file="$BACKUP_DIR/$(basename $file)_perms.txt"
+                stat -c "%a %U:%G" "$file" > "$backup_file"
+                
+                chmod 644 "$file"
+                chown root:root "$file"
+            fi
+        done < <(find /etc/ssh -xdev -type f -name 'ssh_host_*_key.pub' 2>/dev/null)
+        
+        local current_value="all public keys properly configured"
+        local expected="644 root:root"
+        local status="PASS"
+        
+        log_fixed "$policy_name"
+        save_fix_result "$policy_id" "$policy_name" "$expected" "$original_value" "$current_value" "$status"
+        ((FIXED_CHECKS++))
+    fi
+}
+
+# =========================
+# Privilege Escalation
+# =========================
+check_sudo_installed() {
+    local policy_id="SRV-3.h.i"
+    local policy_name="Ensure sudo is installed"
+    
+    ((TOTAL_CHECKS++))
+    
+    if [ "$MODE" = "scan" ]; then
+        local status="FAIL"
+        local expected="installed"
+        local current="unknown"
+        
+        if dpkg -l 2>/dev/null | grep -q "^ii.*sudo"; then
+            current="installed"
+            status="PASS"
+            ((PASSED_CHECKS++))
+        else
+            current="not installed"
+            ((FAILED_CHECKS++))
+        fi
+        
+        print_check_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
+        save_scan_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
+        
+    elif [ "$MODE" = "fix" ]; then
+        local scan_data
+        scan_data=$(get_scan_result "$policy_id")
+        local original_value=$(echo "$scan_data" | python3 -c "import sys, json; data=json.load(sys.stdin); print(data.get('current_value', ''))")
+        
+        if [ -z "$original_value" ]; then
+            if dpkg -l 2>/dev/null | grep -q "^ii.*sudo"; then
+                original_value="installed"
+            else
+                original_value="not installed"
+            fi
+        fi
+        
+        if [ "$original_value" != "installed" ]; then
+            apt install -y sudo >/dev/null 2>&1
+            
+            local current_value="installed"
+            local expected="installed"
+            local status="PASS"
+            
+            log_fixed "$policy_name"
+            save_fix_result "$policy_id" "$policy_name" "$expected" "$original_value" "$current_value" "$status"
+            ((FIXED_CHECKS++))
+        else
+            log_pass "sudo already installed"
+        fi
+    fi
+}
+
+check_sudo_use_pty() {
+    local policy_id="SRV-3.h.ii"
+    local policy_name="Ensure sudo commands use pty"
+    
+    ((TOTAL_CHECKS++))
+    
+    if [ "$MODE" = "scan" ]; then
+        local status="FAIL"
+        local expected="use_pty enabled"
+        local current="unknown"
+        
+        if grep -rq "^Defaults.*use_pty" /etc/sudoers /etc/sudoers.d/ 2>/dev/null; then
+            current="use_pty enabled"
+            status="PASS"
+            ((PASSED_CHECKS++))
+        else
+            current="use_pty not configured"
+            ((FAILED_CHECKS++))
+        fi
+        
+        print_check_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
+        save_scan_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
+        
+    elif [ "$MODE" = "fix" ]; then
+        local scan_data
+        scan_data=$(get_scan_result "$policy_id")
+        local original_value=$(echo "$scan_data" | python3 -c "import sys, json; data=json.load(sys.stdin); print(data.get('current_value', ''))")
+        
+        if [ -z "$original_value" ]; then
+            if grep -rq "^Defaults.*use_pty" /etc/sudoers /etc/sudoers.d/ 2>/dev/null; then
+                original_value="use_pty enabled"
+            else
+                original_value="use_pty not configured"
+            fi
+        fi
+        
+        # Backup
+        cp /etc/sudoers "$BACKUP_DIR/sudoers.$(date +%Y%m%d_%H%M%S)"
+        
+        if ! grep -q "^Defaults.*use_pty" /etc/sudoers; then
+            echo "Defaults use_pty" >> /etc/sudoers
+        fi
+        
+        local current_value="use_pty enabled"
+        local expected="use_pty enabled"
+        local status="PASS"
+        
+        log_fixed "$policy_name"
+        save_fix_result "$policy_id" "$policy_name" "$expected" "$original_value" "$current_value" "$status"
+        ((FIXED_CHECKS++))
+    fi
+}
+
+check_sudo_log_file() {
+    local policy_id="SRV-3.h.iii"
+    local policy_name="Ensure sudo log file exists"
+    
+    ((TOTAL_CHECKS++))
+    
+    if [ "$MODE" = "scan" ]; then
+        local status="FAIL"
+        local expected="logfile configured"
+        local current="unknown"
+        
+        if grep -rq "^Defaults.*logfile=" /etc/sudoers /etc/sudoers.d/ 2>/dev/null; then
+            current=$(grep -r "^Defaults.*logfile=" /etc/sudoers /etc/sudoers.d/ 2>/dev/null | head -1 | sed 's/.*logfile=//')
+            status="PASS"
+            ((PASSED_CHECKS++))
+        else
+            current="no logfile configured"
+            ((FAILED_CHECKS++))
+        fi
+        
+        print_check_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
+        save_scan_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
+        
+    elif [ "$MODE" = "fix" ]; then
+        local scan_data
+        scan_data=$(get_scan_result "$policy_id")
+        local original_value=$(echo "$scan_data" | python3 -c "import sys, json; data=json.load(sys.stdin); print(data.get('current_value', ''))")
+        
+        if [ -z "$original_value" ]; then
+            if grep -rq "^Defaults.*logfile=" /etc/sudoers /etc/sudoers.d/ 2>/dev/null; then
+                original_value="logfile configured"
+            else
+                original_value="no logfile configured"
+            fi
+        fi
+        
+        # Backup
+        [ ! -f "$BACKUP_DIR/sudoers.$(date +%Y%m%d_%H%M%S)" ] && cp /etc/sudoers "$BACKUP_DIR/sudoers.$(date +%Y%m%d_%H%M%S)"
+        
+        if ! grep -q "^Defaults.*logfile=" /etc/sudoers; then
+            echo 'Defaults logfile="/var/log/sudo.log"' >> /etc/sudoers
+        fi
+        
+        local current_value="/var/log/sudo.log"
+        local expected="logfile configured"
+        local status="PASS"
+        
+        log_fixed "$policy_name"
+        save_fix_result "$policy_id" "$policy_name" "$expected" "$original_value" "$current_value" "$status"
+        ((FIXED_CHECKS++))
+    fi
+}
+
+# =========================
+# Main Execution
+# =========================
+main() {
+    log_info "========================================"
+    log_info "Services Hardening Script"
+    log_info "Mode: $MODE"
+    log_info "========================================"
+    
+    # Initialize database
+    if [ "$MODE" = "scan" ] || [ "$MODE" = "fix" ]; then
+        init_database
+    fi
+    
+    # Run checks
+    check_server_services
+    check_client_services
+    
+    log_info "=== 3.c Time Synchronization ==="
+    check_time_sync
+    check_single_time_daemon
+    
+    log_info "=== 3.e Chrony Configuration ==="
+    check_chrony_timeserver
+    check_chrony_user
+    check_chrony_enabled
+    
+    log_info "=== 3.f Cron Configuration ==="
+    check_cron_enabled
+    check_cron_permissions "/etc/crontab" "SRV-3.f.ii" "Ensure permissions on /etc/crontab are configured" "600"
+    check_cron_permissions "/etc/cron.hourly" "SRV-3.f.iii" "Ensure permissions on /etc/cron.hourly are configured" "700"
+    check_cron_permissions "/etc/cron.daily" "SRV-3.f.iv" "Ensure permissions on /etc/cron.daily are configured" "700"
+    check_cron_permissions "/etc/cron.weekly" "SRV-3.f.v" "Ensure permissions on /etc/cron.weekly are configured" "700"
+    check_cron_permissions "/etc/cron.monthly" "SRV-3.f.vi" "Ensure permissions on /etc/cron.monthly are configured" "700"
+    check_cron_allow_deny
+    
+    log_info "=== 3.g SSH Configuration ==="
+    check_sshd_permission
+    check_ssh_private_keys
+    check_ssh_public_keys
+    
+    log_info "=== 3.h Privilege Escalation ==="
+    check_sudo_installed
+    check_sudo_use_pty
+    check_sudo_log_file
+    
+    # Print summary
+    echo ""
+    log_info "========================================"
+    log_info "Summary for $MODULE_NAME Module"
+    log_info "========================================"
+    log_info "Total Checks: $TOTAL_CHECKS"
+    
+    if [ "$MODE" = "scan" ]; then
+        log_pass "Passed: $PASSED_CHECKS"
+        log_error "Failed: $FAILED_CHECKS"
+    elif [ "$MODE" = "fix" ]; then
+        log_fixed "Fixed: $FIXED_CHECKS"
+        log_manual "Manual: $MANUAL_CHECKS"
+    fi
+    
+    log_info "========================================"
+}
+
+# Run main function
+main
