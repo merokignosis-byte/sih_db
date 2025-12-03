@@ -216,18 +216,19 @@ check_ufw_enabled() {
     ((TOTAL_CHECKS++))
 
     local current status
-    if systemctl is-enabled ufw >/dev/null 2>&1; then
-        current="Enabled"
+    if systemctl is-active ufw >/dev/null 2>&1; then
+        current="Active"
         status="PASS"
         ((PASSED_CHECKS++))
     else
-        current="Disabled"
+        current="Inactive"
         status="FAIL"
         ((FAILED_CHECKS++))
         if [[ "$MODE" == "fix" ]]; then
             systemctl enable ufw >/dev/null
+            systemctl start ufw >/dev/null
             ufw --force enable >/dev/null
-            current="Enabled"
+            current="Active"
             status="PASS"
             ((FIXED_CHECKS++))
         fi
