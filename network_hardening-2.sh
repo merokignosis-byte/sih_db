@@ -40,6 +40,23 @@ init_database() {
 import sqlite3
 conn = sqlite3.connect('$DB_PATH')
 cursor = conn.cursor()
+
+# Create scan_results table
+cursor.execute('''
+CREATE TABLE IF NOT EXISTS scan_results (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    module_name TEXT NOT NULL,
+    policy_id TEXT NOT NULL,
+    policy_name TEXT NOT NULL,
+    expected_value TEXT NOT NULL,
+    current_value TEXT NOT NULL,
+    status TEXT NOT NULL,
+    scan_timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(module_name, policy_id)
+);
+''')
+
+# Create fix_history table
 cursor.execute('''
 CREATE TABLE IF NOT EXISTS fix_history (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -53,11 +70,36 @@ CREATE TABLE IF NOT EXISTS fix_history (
     fix_timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
     rollback_executed TEXT DEFAULT 'NO',
     UNIQUE(module_name, policy_id)
-)
+);
 ''')
+
 conn.commit()
 conn.close()
 "
+}
+
+save_scan_result() {
+    local policy_id="$1"
+    local policy_name="$2"
+    local expected_value="$3"
+    local current_value="$4"
+    local status="$5"
+
+    python3 - <<EOF
+import sqlite3
+DB_PATH = "$DB_PATH"
+MODULE_NAME = "$MODULE_NAME"
+
+conn = sqlite3.connect(DB_PATH)
+cursor = conn.cursor()
+cursor.execute("""
+    INSERT OR REPLACE INTO scan_results
+    (module_name, policy_id, policy_name, expected_value, current_value, status, scan_timestamp)
+    VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+""", (MODULE_NAME, "$policy_id", "$policy_name", "$expected_value", "$current_value", "$status"))
+conn.commit()
+conn.close()
+EOF
 }
 
 save_fix_result() {
@@ -103,7 +145,7 @@ EOF
 }
 
 # ============================================================================
-# Print Results Like filesystem.sh
+# Print Results Like network.sh
 # ============================================================================
 print_check_result() {
     local policy_id="$1"
@@ -160,6 +202,9 @@ check_ipv6_status() {
     fi
 
     print_check_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
+    if [ "$MODE" = "scan" ]; then
+    save_scan_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
+    fi
     if [ "$MODE" = "fix" ]; then
         save_fix_result "$policy_id" "$policy_name" "$expected" "IPv6=$state" "$current" "$status"
     fi
@@ -200,6 +245,9 @@ check_disable_wireless() {
     fi
 
     print_check_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
+    if [ "$MODE" = "scan" ]; then
+    save_scan_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
+    fi
     if [ "$MODE" = "fix" ]; then
         save_fix_result "$policy_id" "$policy_name" "$expected" "$current" "$current" "$status"
     fi
@@ -244,6 +292,9 @@ check_bluetooth() {
     fi
 
     print_check_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
+    if [ "$MODE" = "scan" ]; then
+    save_scan_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
+    fi
     if [ "$MODE" = "fix" ]; then
         save_fix_result "$policy_id" "$policy_name" "$expected" "${enabled}/${active}/${loaded}" "$current" "$status"
     fi
@@ -285,6 +336,9 @@ disable_module_rule() {
     fi
 
     print_check_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
+    if [ "$MODE" = "scan" ]; then
+    save_scan_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
+    fi
     if [ "$MODE" = "fix" ]; then
         save_fix_result "$policy_id" "$policy_name" "$expected" "$loaded" "$current" "$status"
     fi
@@ -304,12 +358,9 @@ sysctl_rule() {
     local key="$3"
     local expected_val="$4"
     ((TOTAL_CHECKS++))
-
     local current_val
     current_val=$(sysctl -n "$key" 2>/dev/null || echo "unknown")
-
     local status
-
     if [ "$current_val" = "$expected_val" ]; then
         status="PASS"
         ((PASSED_CHECKS++))
@@ -328,8 +379,11 @@ sysctl_rule() {
             ((FIXED_CHECKS++))
         fi
     fi
-
     print_check_result "$policy_id" "$policy_name" "$expected_val" "$current_val" "$status"
+    if [ "$MODE" = "scan" ]; then
+        save_scan_result "$policy_id" "$policy_name" "$expected_val" "$current_val" "$status"
+    fi
+
     if [ "$MODE" = "fix" ]; then
         save_fix_result "$policy_id" "$policy_name" "$expected_val" "$current_val" "$current_val" "$status"
     fi
