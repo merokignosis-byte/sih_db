@@ -1,10 +1,5 @@
 #!/bin/bash
-# ============================================================================
-# Access Control Hardening Script
-# Module: Access Control
-# Modes: scan | fix | rollback
-# Based on Annexure B - Section 6
-# ============================================================================
+
 MODE="${1:-scan}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DB_PATH="$SCRIPT_DIR/../hardening.db"
@@ -13,27 +8,18 @@ MODULE_NAME="Access Control"
 
 mkdir -p "$BACKUP_DIR"
 
-# ============================================================================
-# Colors for output
-# ============================================================================
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-# ============================================================================
-# Counters
-# ============================================================================
 TOTAL_CHECKS=0
 PASSED_CHECKS=0
 FAILED_CHECKS=0
 FIXED_CHECKS=0
 MANUAL_CHECKS=0
 
-# ============================================================================
-# Logging Functions
-# ============================================================================
 log_info()  { echo -e "${GREEN}[INFO]${NC} $1"; }
 log_warn()  { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error() { echo -e "${RED}[FAIL]${NC} $1"; }
@@ -41,9 +27,6 @@ log_pass()  { echo -e "${GREEN}[PASS]${NC} $1"; }
 log_fixed() { echo -e "${BLUE}[FIXED]${NC} $1"; }
 log_manual() { echo -e "${BLUE}[MANUAL]${NC} $1"; }
 
-# ============================================================================
-# Privilege Check
-# ============================================================================
 check_root_privileges() {
     if [ "$EUID" -ne 0 ]; then
         echo ""
@@ -54,9 +37,6 @@ check_root_privileges() {
     fi
 }
 
-# ============================================================================
-# Database Functions
-# ============================================================================
 init_database() {
     python3 - <<EOF
 import sqlite3
@@ -186,9 +166,6 @@ print_check_result() {
     fi
     echo "=============================================="
 }
-# ============================================================================
-# SECTION 6.a - SSH SERVER CONFIGURATION
-# ============================================================================
 
 # 6.a.i - SSH Config Permissions
 check_ssh_config_permissions() {
@@ -1029,9 +1006,6 @@ check_su_restricted() {
     [[ "$MODE" == "scan" ]] && save_scan_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
     [[ "$MODE" == "fix" ]] && save_fix_result "$policy_id" "$policy_name" "$expected" "not restricted" "$current" "$status"
 }
-# ============================================================================
-# SECTION 6.c - PLUGGABLE AUTHENTICATION MODULES (PAM)
-# ============================================================================
 
 # 6.c.i.1 - Latest PAM Version
 check_pam_latest() {
@@ -1835,9 +1809,7 @@ check_pam_pwhistory_authtok() {
 
 run_all_ssh_checks() {
     echo ""
-    log_info "╔════════════════════════════════════════════════════════════╗"
-    log_info "║         SECTION 6.a - SSH SERVER CONFIGURATION             ║"
-    log_info "╚════════════════════════════════════════════════════════════╝"
+    log_info "         SECTION 6.a - SSH SERVER CONFIGURATION             "
     
     check_ssh_config_permissions
     check_ssh_private_keys
@@ -1865,10 +1837,7 @@ run_all_ssh_checks() {
 
 run_all_sudo_checks() {
     echo ""
-    log_info "╔════════════════════════════════════════════════════════════╗"
-    log_info "║       SECTION 6.b - PRIVILEGE ESCALATION                   ║"
-    log_info "╚════════════════════════════════════════════════════════════╝"
-    
+    log_info "       SECTION 6.b - PRIVILEGE ESCALATION                   "
     check_sudo_installed
     check_sudo_use_pty
     check_sudo_logfile
@@ -1880,11 +1849,7 @@ run_all_sudo_checks() {
 
 run_all_pam_checks() {
     echo ""
-    log_info "╔════════════════════════════════════════════════════════════╗"
-    log_info "║   SECTION 6.c - PLUGGABLE AUTHENTICATION MODULES (PAM)     ║"
-    log_info "╚════════════════════════════════════════════════════════════╝"
-    
-    # PAM Packages
+    log_info "   SECTION 6.c - PLUGGABLE AUTHENTICATION MODULES (PAM)     "
     check_pam_latest
     check_pam_modules
     check_pam_pwquality_installed
@@ -1984,97 +1949,32 @@ print_summary() {
     echo "========================================================================"
 }
 
-print_usage() {
-    echo ""
-    echo "========================================================================"
-    echo "Access Control Hardening Script - Based on Annexure B Section 6"
-    echo "========================================================================"
-    echo ""
-    echo "Usage: $0 {scan|fix}"
-    echo ""
-    echo "Modes:"
-    echo "  scan     - Check system against access control hardening rules"
-    echo "            (47 comprehensive checks covering SSH, sudo, and PAM)"
-    echo "            Results stored in scan_results table"
-    echo ""
-    echo "  fix      - Apply hardening fixes automatically where possible"
-    echo "            (Creates backups and logs all changes to fix_history table)"
-    echo ""
-    echo "Rollback:"
-    echo "  To rollback changes made by fix mode, use:"
-    echo "    sudo ./access_control_rollback.sh"
-    echo ""
-    echo "Examples:"
-    echo "  sudo $0 scan       # Check current configuration"
-    echo "  sudo $0 fix        # Apply hardening"
-    echo ""
-    echo "Coverage:"
-    echo "  - SSH Server Configuration (23 checks)"
-    echo "  - Privilege Escalation/Sudo (7 checks)"
-    echo "  - PAM Configuration (17 checks)"
-    echo ""
-    echo "Database Tables:"
-    echo "  - scan_results  : Stores scan findings (PASS/FAIL)"
-    echo "  - fix_history   : Tracks all modifications for rollback"
-    echo ""
-    echo "Database: $DB_PATH"
-    echo "Backups:  $BACKUP_DIR"
-    echo ""
-    echo "========================================================================"
-    echo ""
-}
-
-# ============================================================================
-# MAIN
-# ============================================================================
-
 main() {
-    # Print header
     echo "========================================================================"
-    echo "           Access Control Hardening Script v2.0"
-    echo "           Based on Annexure B - Section 6"
+    echo "Access Control Hardening Script"
+    echo "Module: $MODULE_NAME"
+    echo "Mode: $MODE"
     echo "========================================================================"
-    echo "Module       : $MODULE_NAME"
-    echo "Mode         : $MODE"
-    echo "Database     : $DB_PATH"
-    echo "Backup Dir   : $BACKUP_DIR"
-    echo "========================================================================"
-    
-    # Initialize database
+
     init_database
-    
-    # Check mode
-    if [ "$MODE" = "scan" ]; then
-        log_info "Starting security scan..."
-        run_all_ssh_checks
-        run_all_sudo_checks
-        run_all_pam_checks
-        print_summary
-        
-    elif [ "$MODE" = "fix" ]; then
-        check_root_privileges
-        log_info "Starting hardening fixes..."
-        echo ""
-        log_warn "This will modify system configuration files"
-        log_warn "Backups will be created in: $BACKUP_DIR"
-        echo ""
-        read -p "Continue with fixes? (yes/no): " confirm
-        if [[ "$confirm" != "yes" && "$confirm" != "y" ]]; then
-            log_info "Fix mode cancelled"
-            exit 0
-        fi
-        
-        run_all_ssh_checks
-        run_all_sudo_checks
-        run_all_pam_checks
-        print_summary
-        
-    else
-        log_error "Invalid mode: $MODE"
-        print_usage
+
+    if [ "$MODE" = "fix" ] && [ "$EUID" -ne 0 ]; then
+        log_error "This script must be run as root for fix mode"
         exit 1
     fi
+    run_all_ssh_checks
+    run_all_sudo_checks
+    run_all_pam_checks
+    echo ""
+    echo "========================================================================"
+    echo "Access Control Hardening Summary"
+    echo "========================================================================"
+    echo "Total Checks: $TOTAL_CHECKS"
+    echo "Passed: $PASSED_CHECKS"
+    echo "Failed: $FAILED_CHECKS"
+    echo "Fixed:  $FIXED_CHECKS"
+    echo "Manual Actions Required: $MANUAL_CHECKS"
+    echo "========================================================================"
 }
 
-# Run main function
 main

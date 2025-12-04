@@ -1,9 +1,5 @@
 #!/bin/bash
-# ============================================================================
-# User Accounts and Environment Hardening Script
-# Module: User Accounts and Environment
-# Modes: scan | fix
-# ============================================================================
+
 MODE="${1:-scan}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DB_PATH="$SCRIPT_DIR/../hardening.db"
@@ -12,9 +8,6 @@ MODULE_NAME="User Accounts and Environment"
 
 mkdir -p "$BACKUP_DIR"
 
-# ============================================================================
-# Colors for output
-# ============================================================================
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
