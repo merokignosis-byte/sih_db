@@ -270,7 +270,7 @@ check_ufw_loopback() {
     fi
     print_check_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
     [[ "$MODE" == "scan" ]] && save_scan_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
-    [[ "$MODE" == "fix" ]] && save_fix_result "$policy_id" "$policy_name" "$expected" "$snapshot" "$current" "$status"
+    [[ "$MODE" == "fix" ]] && save_fix_result "$policy_id" "$policy_name" "$expected" "Not Configured" "$current" "$status"
 }
 
 check_ufw_outbound() {
@@ -303,7 +303,7 @@ check_ufw_outbound() {
 
     print_check_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
     [[ "$MODE" == "scan" ]] && save_scan_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
-    [[ "$MODE" == "fix" ]] && save_fix_result "$policy_id" "$policy_name" "$expected" "$snapshot" "$current" "$status"
+    [[ "$MODE" == "fix" ]] && save_fix_result "$policy_id" "$policy_name" "$expected" "Not Configured" "$current" "$status"
 }
 
 check_ufw_rules_for_open_ports() {
