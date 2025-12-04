@@ -2964,80 +2964,301 @@ EOFAIDE
 }
 
 # ============================================================================
-# Main Execution Function - Add to your existing main() function
+# Main Execution Block
 # ============================================================================
 
 run_all_checks() {
-    echo "=============================================="
-    echo "Logging and Auditing Hardening - Part 3"
-    echo "Mode: $MODE"
-    echo "=============================================="
+    log_info "========================================================================"
+    log_info "Starting Logging and Auditing Checks"
+    log_info "========================================================================"
+    
+    # ========================================================================
+    # 8.a System Logging
+    # ========================================================================
     echo ""
-
-    # Run Part 3 checks
+    log_info "========================================="
+    log_info "8.a SYSTEM LOGGING"
+    log_info "========================================="
+    
+    # 8.a.i Configure systemd-journald service
+    echo ""
+    log_info "--- 8.a.i Configure systemd-journald service ---"
+    check_8_a_i_1
+    check_8_a_i_2
+    check_8_a_i_3
+    check_8_a_i_4
+    
+    # 8.a.ii Configure rsyslog
+    echo ""
+    log_info "--- 8.a.ii Configure rsyslog ---"
+    check_8_a_ii_1
+    check_8_a_ii_2
+    check_8_a_ii_3
+    check_8_a_ii_4
+    check_8_a_ii_5
+    check_8_a_ii_6
+    check_8_a_ii_7
+    check_8_a_ii_8
+    
+    # 8.a.iii Configure Logfiles
+    echo ""
+    log_info "--- 8.a.iii Configure Logfiles ---"
+    check_8_a_iii_1
+    
+    # ========================================================================
+    # 8.b System Auditing
+    # ========================================================================
+    echo ""
+    log_info "========================================="
+    log_info "8.b SYSTEM AUDITING"
+    log_info "========================================="
+    
+    # 8.b.i Configure auditd Service
+    echo ""
+    log_info "--- 8.b.i Configure auditd Service ---"
+    check_8_b_i_1
+    check_8_b_i_2
+    check_8_b_i_3
+    check_8_b_i_4
+    
+    # 8.b.c Configure Data Retention
+    echo ""
+    log_info "--- 8.b.c Configure Data Retention ---"
+    check_8_b_c_i
+    check_8_b_c_ii
+    check_8_b_c_iii
+    check_8_b_c_iv
+    
+    # 8.b.d Configure auditd Rules
+    echo ""
+    log_info "--- 8.b.d Configure auditd Rules ---"
+    check_8_b_d_i
+    check_8_b_d_ii
+    check_8_b_d_iii
+    check_8_b_d_iv
+    check_8_b_d_v
+    check_8_b_d_vi
+    check_8_b_d_vii
+    check_8_b_d_viii
+    check_8_b_d_ix
+    check_8_b_d_x
+    check_8_b_d_xi
+    check_8_b_d_xii
+    check_8_b_d_xiii
+    check_8_b_d_xiv
+    check_8_b_d_xv
+    check_8_b_d_xvi
+    check_8_b_d_xvii
+    check_8_b_d_xviii
+    check_8_b_d_xix
     check_8_b_d_xx
     check_8_b_d_xxi
     
-    # 8.b.e - Configure auditd File Access
-    check_8_b_e_i
-    check_8_b_e_ii
-    check_8_b_e_iii
-    check_8_b_e_iv
-    check_8_b_e_v
-    check_8_b_e_vi
-    check_8_b_e_vii
-    check_8_b_e_viii
-    check_8_b_e_ix
-    check_8_b_e_x
+    # 8.b.e Configure auditd File Access
+    echo ""
+    log_info "--- 8.b.e Configure auditd File Access ---"
+    check_8_b_e_log_files
+    check_8_b_e_config_files
+    check_8_b_e_audit_tools
     
-    # 8.b.f - Configure Integrity Checking
-    check_8_b_f_i
-    check_8_b_f_ii
-    check_8_b_f_iii
+    # ========================================================================
+    # 8.f Configure Integrity Checking
+    # ========================================================================
+    echo ""
+    log_info "========================================="
+    log_info "8.f CONFIGURE INTEGRITY CHECKING"
+    log_info "========================================="
+    
+    check_8_f_i
+    check_8_f_ii
+    check_8_f_iii
 }
-
-# ============================================================================
-# Summary Report
-# ============================================================================
 
 print_summary() {
     echo ""
-    echo "=============================================="
+    echo "========================================================================"
     echo "LOGGING AND AUDITING HARDENING SUMMARY"
-    echo "=============================================="
-    echo -e "Total Checks    : $TOTAL_CHECKS"
-    echo -e "${GREEN}Passed Checks${NC}   : $PASSED_CHECKS"
-    echo -e "${RED}Failed Checks${NC}   : $FAILED_CHECKS"
-    echo -e "${BLUE}Fixed Checks${NC}    : $FIXED_CHECKS"
-    echo -e "${YELLOW}Manual Checks${NC}   : $MANUAL_CHECKS"
-    echo "=============================================="
+    echo "========================================================================"
+    echo "Module Name         : $MODULE_NAME"
+    echo "Execution Mode      : $MODE"
+    echo "Database Path       : $DB_PATH"
+    echo "Backup Directory    : $BACKUP_DIR"
+    echo "------------------------------------------------------------------------"
+    echo "Total Checks        : $TOTAL_CHECKS"
     
-    if [ "$MANUAL_CHECKS" -gt 0 ]; then
+    if [[ "$MODE" == "scan" ]]; then
+        echo -e "Passed Checks       : ${GREEN}$PASSED_CHECKS${NC}"
+        echo -e "Failed Checks       : ${RED}$FAILED_CHECKS${NC}"
+        echo "------------------------------------------------------------------------"
+        
+        if [ $FAILED_CHECKS -eq 0 ]; then
+            echo -e "${GREEN}✓ ALL CHECKS PASSED!${NC}"
+            echo "Your system's logging and auditing configuration is compliant."
+        else
+            echo -e "${YELLOW}⚠ FAILED CHECKS DETECTED${NC}"
+            echo "Run the script in 'fix' mode to remediate issues:"
+            echo "  sudo bash $0 fix"
+            echo ""
+            echo "To view detailed scan results:"
+            echo "  sqlite3 $DB_PATH \"SELECT policy_id, policy_name, status FROM scan_results WHERE module_name='$MODULE_NAME' AND status='FAIL';\""
+        fi
+        
+    elif [[ "$MODE" == "fix" ]]; then
+        echo -e "Passed Checks       : ${GREEN}$PASSED_CHECKS${NC}"
+        echo -e "Fixed Checks        : ${BLUE}$FIXED_CHECKS${NC}"
+        echo -e "Manual Checks       : ${YELLOW}$MANUAL_CHECKS${NC}"
+        echo -e "Failed Checks       : ${RED}$FAILED_CHECKS${NC}"
+        echo "------------------------------------------------------------------------"
+        
+        if [ $FIXED_CHECKS -gt 0 ]; then
+            echo -e "${BLUE}✓ FIXES APPLIED: $FIXED_CHECKS${NC}"
+            echo "Changes have been applied and backed up to: $BACKUP_DIR"
+        fi
+        
+        if [ $MANUAL_CHECKS -gt 0 ]; then
+            echo -e "${YELLOW}⚠ MANUAL INTERVENTION REQUIRED: $MANUAL_CHECKS items${NC}"
+            echo "Please review the manual configuration instructions above."
+            echo ""
+            echo "Manual items are marked with [MANUAL] in the output."
+        fi
+        
+        if [ $FAILED_CHECKS -gt 0 ]; then
+            echo -e "${RED}✗ FAILED: $FAILED_CHECKS checks could not be fixed${NC}"
+        fi
+        
         echo ""
-        echo -e "${YELLOW}ATTENTION:${NC} $MANUAL_CHECKS checks require manual intervention."
-        echo "Review the MANUAL messages above for instructions."
+        echo "To verify fixes, run in 'scan' mode:"
+        echo "  sudo bash $0 scan"
+        echo ""
+        echo "To view fix history:"
+        echo "  sqlite3 $DB_PATH \"SELECT policy_id, policy_name, status FROM fix_history WHERE module_name='$MODULE_NAME';\""
+        echo ""
+        echo "To rollback changes, use the rollback script:"
+        echo "  sudo bash logging_auditing_rollback.sh"
+        
     fi
     
-    if [ "$FAILED_CHECKS" -gt 0 ] && [ "$MODE" == "scan" ]; then
-        echo ""
-        echo -e "${YELLOW}TIP:${NC} Run with 'fix' mode to automatically fix issues:"
-        echo "  sudo $0 fix"
-    fi
+    echo "========================================================================"
     echo ""
+    
+    # Additional warnings/notes
+    if [[ "$MODE" == "fix" ]]; then
+        if systemctl is-active rsyslog >/dev/null 2>&1 && systemctl is-active systemd-journald >/dev/null 2>&1; then
+            echo -e "${YELLOW}NOTE:${NC} Both rsyslog and journald are running."
+            echo "This is normal if journald forwards logs to rsyslog."
+            echo ""
+        fi
+        
+        if grep -q "^-e 2" /etc/audit/rules.d/*.rules 2>/dev/null; then
+            echo -e "${YELLOW}WARNING:${NC} Audit configuration is IMMUTABLE (-e 2 is set)."
+            echo "You must reboot to modify audit rules."
+            echo ""
+        fi
+    fi
+}
+
+# ============================================================================
+# Main Entry Point
+# ============================================================================
+main() {
+    echo "========================================================================"
+    echo "Logging and Auditing Hardening Script"
+    echo "Module: $MODULE_NAME"
+    echo "Mode: $MODE"
+    echo "========================================================================"
+    echo ""
+    
+    # Validate mode
+    if [[ "$MODE" != "scan" && "$MODE" != "fix" ]]; then
+        echo -e "${RED}Error: Invalid mode '$MODE'${NC}"
+        echo ""
+        echo "Usage: $0 {scan|fix}"
+        echo ""
+        echo "Modes:"
+        echo "  scan  - Check compliance without making changes"
+        echo "  fix   - Automatically fix issues (with backups)"
+        echo ""
+        echo "Examples:"
+        echo "  sudo bash $0 scan"
+        echo "  sudo bash $0 fix"
+        echo ""
+        exit 1
+    fi
+    
+    # Check for root privileges (required for fix mode)
+    if [[ "$MODE" == "fix" ]] && [[ "$EUID" -ne 0 ]]; then
+        echo -e "${RED}Error: Fix mode requires root privileges${NC}"
+        echo "Please run with sudo:"
+        echo "  sudo bash $0 fix"
+        echo ""
+        exit 1
+    fi
+    
+    # Warn if not root in scan mode (some checks may fail)
+    if [[ "$MODE" == "scan" ]] && [[ "$EUID" -ne 0 ]]; then
+        echo -e "${YELLOW}Warning: Running scan mode without root privileges${NC}"
+        echo "Some checks may fail due to permission restrictions."
+        echo "For complete results, run with sudo:"
+        echo "  sudo bash $0 scan"
+        echo ""
+        read -p "Continue anyway? (y/N): " confirm
+        if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+            echo "Exiting."
+            exit 0
+        fi
+        echo ""
+    fi
+    
+    # Initialize database
+    log_info "Initializing database..."
+    init_database
+    
+    # Display mode-specific information
+    if [[ "$MODE" == "scan" ]]; then
+        echo -e "${GREEN}SCAN MODE${NC}"
+        echo "This will check your system's logging and auditing configuration."
+        echo "No changes will be made to your system."
+        echo ""
+    elif [[ "$MODE" == "fix" ]]; then
+        echo -e "${BLUE}FIX MODE${NC}"
+        echo "This will automatically fix issues where possible."
+        echo "Backups will be created in: $BACKUP_DIR"
+        echo ""
+        echo -e "${YELLOW}WARNING: This will modify system configuration files!${NC}"
+        echo ""
+        read -p "Do you want to proceed? (yes/no): " confirm
+        if [[ "$confirm" != "yes" ]]; then
+            echo "Fix cancelled by user."
+            exit 0
+        fi
+        echo ""
+    fi
+    
+    # Run all checks
+    run_all_checks
+    
+    # Print summary
+    print_summary
+    
+    # Exit with appropriate code
+    if [[ "$MODE" == "scan" ]]; then
+        if [ $FAILED_CHECKS -eq 0 ]; then
+            exit 0
+        else
+            exit 1
+        fi
+    elif [[ "$MODE" == "fix" ]]; then
+        if [ $FAILED_CHECKS -eq 0 ] && [ $MANUAL_CHECKS -eq 0 ]; then
+            exit 0
+        else
+            exit 2  # Exit code 2 indicates manual intervention needed
+        fi
+    fi
 }
 
 # ============================================================================
 # Execute if run as main script
 # ============================================================================
-
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-    # Check for root
-    if [ "$EUID" -ne 0 ]; then
-        echo "Please run as root or with sudo"
-        exit 1
-    fi
-    
-    init_database
-    run_all_checks
-    print_summary
+    main
 fi
