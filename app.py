@@ -23,6 +23,7 @@ MODULES = [
     ("Firewall", "firewall.sh"),
     ("Network", "network.sh"),
     ("User Accounts", "user_accounts.sh"),
+    ("Logging and Auditing", "logging_auditing.sh"),
 ]
 
 ROLLBACK_SCRIPTS = {
@@ -34,6 +35,7 @@ ROLLBACK_SCRIPTS = {
     "Firewall": "firewall_rollback.sh",
     "Network": "network_rollback.sh",
     "User Accounts": "user_accounts_rollback.sh",
+    "Logging and Auditing": "logging_auditing_rollback.sh",
 }
 
 # Colors - Blue Theme
@@ -503,7 +505,7 @@ class HardeningApp:
         self.clear_console()
         self.reset_counters()
         self.clear_filter()
-
+    
     def load_scan_results(self, module_name):
         self.tree.delete(*self.tree.get_children())
         
@@ -533,11 +535,24 @@ class HardeningApp:
             # Update stats
             self.stats_vars["Total Policies"].set(str(len(rows)))
             
+            # FIX: Convert sqlite3.Row objects to regular tuples/lists
+            converted_rows = []
+            for row in rows:
+                # Extract values from the sqlite3.Row object
+                converted_row = (
+                    row['policy_id'],
+                    row['policy_name'],
+                    row['expected_value'],
+                    row['current_value'],
+                    row['status']
+                )
+                converted_rows.append(converted_row)
+            
             # Filter rows based on search text
-            filtered_rows = rows
+            filtered_rows = converted_rows
             if self.filter_text:
                 filtered_rows = [
-                    r for r in rows 
+                    r for r in converted_rows 
                     if any(self.filter_text.lower() in str(field).lower() 
                           for field in r)
                 ]
@@ -547,7 +562,7 @@ class HardeningApp:
                 self.tree.insert("", tk.END, values=r, tags=(status,))
             
             # Update counters and summary
-            self.update_counts_from_db(rows)
+            self.update_counts_from_db(converted_rows)
             self.update_summary()
             
             # Configure tag colors
@@ -559,7 +574,7 @@ class HardeningApp:
             
         except Exception as e:
             self.append_console(f"[ERROR] Failed to load scan results: {e}")
-
+    
     def load_fix_history(self):
         self.history_tree.delete(*self.history_tree.get_children())
         
@@ -584,7 +599,16 @@ class HardeningApp:
             rows = cursor.fetchall()
             
             for r in rows:
-                self.history_tree.insert("", tk.END, values=r)
+                # Convert sqlite3.Row to tuple for display
+                converted_row = (
+                    r['policy_id'],
+                    r['policy_name'],
+                    r['original_value'],
+                    r['current_value'],
+                    r['status'],
+                    r['fix_timestamp']
+                )
+                self.history_tree.insert("", tk.END, values=converted_row)
                 
         except Exception as e:
             self.append_console(f"[ERROR] Failed to load fix history: {e}")
@@ -1001,18 +1025,29 @@ Module:        {MODULES[self.current_module_index][0]}
             
             # Write data
             for row_num, row in enumerate(rows, 2):
-                for col_num, value in enumerate(row, 1):
+                # Convert sqlite3.Row to tuple
+                row_data = (
+                    row['policy_id'],
+                    row['policy_name'],
+                    row['expected_value'],
+                    row['current_value'],
+                    row['status'],
+                    row['module_name'],
+                    row['scan_timestamp']
+                )
+                
+                for col_num, value in enumerate(row_data, 1):
                     ws.cell(row=row_num, column=col_num, value=value)
                     
                     # Color code based on status
                     if col_num == 5:  # Status column
-                        if row[4] == "PASS":
+                        if row_data[4] == "PASS":
                             ws.cell(row=row_num, column=col_num).fill = PatternFill(
                                 start_color="FFC6EFCE", end_color="FFC6EFCE", fill_type="solid")
-                        elif row[4] == "FAIL":
+                        elif row_data[4] == "FAIL":
                             ws.cell(row=row_num, column=col_num).fill = PatternFill(
                                 start_color="FFFFC7CE", end_color="FFFFC7CE", fill_type="solid")
-                        elif row[4] == "MANUAL":
+                        elif row_data[4] == "MANUAL":
                             ws.cell(row=row_num, column=col_num).fill = PatternFill(
                                 start_color="FFFFEB9C", end_color="FFFFEB9C", fill_type="solid")
             
@@ -1083,7 +1118,17 @@ Module:        {MODULES[self.current_module_index][0]}
                 rows = cursor.fetchall()
                 
                 for row_num, row in enumerate(rows, 2):
-                    for col_num, value in enumerate(row, 1):
+                    # Convert sqlite3.Row to tuple
+                    row_data = (
+                        row['policy_id'],
+                        row['policy_name'],
+                        row['expected_value'],
+                        row['current_value'],
+                        row['status'],
+                        row['scan_timestamp']
+                    )
+                    
+                    for col_num, value in enumerate(row_data, 1):
                         ws.cell(row=row_num, column=col_num, value=value)
             
             # Remove default sheet if empty
@@ -1101,7 +1146,6 @@ Module:        {MODULES[self.current_module_index][0]}
     # Dashboard and Summary
     # -------------------------
     def update_counts_from_db(self, rows):
-        """Update counters from database rows"""
         self.count_pass = sum(1 for r in rows if r[4] == "PASS")
         self.count_fail = sum(1 for r in rows if r[4] == "FAIL")
         self.count_manual = sum(1 for r in rows if r[4] == "MANUAL")

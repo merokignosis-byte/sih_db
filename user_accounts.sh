@@ -4,7 +4,7 @@ MODE="${1:-scan}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DB_PATH="$SCRIPT_DIR/../hardening.db"
 BACKUP_DIR="$SCRIPT_DIR/../backups/user_accounts"
-MODULE_NAME="User Accounts and Environment"
+MODULE_NAME="User Accounts"
 
 mkdir -p "$BACKUP_DIR"
 
