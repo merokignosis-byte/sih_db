@@ -2255,3 +2255,789 @@ EOF
     [[ "$MODE" == "scan" ]] && save_scan_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
     [[ "$MODE" == "fix" && "$status" == "FIXED" ]] && save_fix_result "$policy_id" "$policy_name" "$expected" "not configured" "$current" "FIXED"
 }
+# ============================================================================
+# PART 3 - Completing Remaining Audit Checks
+# Add this after check_8_b_d_xix() in your existing script
+# 8.b.d.xx-xxi, 8.b.e (i-x), 8.b.f (i-iii)
+# ============================================================================
+
+check_8_b_d_xx() {
+    local policy_id="8.b.d.xx"
+    local policy_name="Ensure the audit configuration is immutable"
+    local expected="-e 2 in audit rules (immutable)"
+    ((TOTAL_CHECKS++))
+
+    local current status
+    local rules_file="/etc/audit/rules.d/hardening.rules"
+    
+    # Check if immutable flag is set
+    local has_immutable=$(grep -E "^\-e 2" "$rules_file" 2>/dev/null | wc -l)
+    local running=$(auditctl -l 2>/dev/null | grep -E "^enabled" | grep "2" | wc -l)
+    
+    if [ "$has_immutable" -gt 0 ] && [ "$running" -gt 0 ]; then
+        current="Immutable (audit config locked)"
+        status="PASS"
+        ((PASSED_CHECKS++))
+        log_pass "Audit configuration is immutable"
+    else
+        current="Not immutable"
+        status="FAIL"
+        ((FAILED_CHECKS++))
+        log_error "Audit configuration is not immutable"
+        
+        if [[ "$MODE" == "fix" ]]; then
+            log_manual "=============================================="
+            log_manual "MANUAL CONFIGURATION: Audit Immutability"
+            log_manual "=============================================="
+            log_manual "Making audit config immutable requires system reboot."
+            log_manual ""
+            log_manual "WARNING: After adding -e 2, audit rules CANNOT be"
+            log_manual "modified until system reboot!"
+            log_manual ""
+            log_manual "To enable immutability:"
+            log_manual "1. Add to end of $rules_file:"
+            log_manual "   echo '-e 2' >> $rules_file"
+            log_manual ""
+            log_manual "2. Reload rules:"
+            log_manual "   sudo augenrules --load"
+            log_manual ""
+            log_manual "3. Verify after reboot:"
+            log_manual "   sudo auditctl -l | grep enabled"
+            log_manual ""
+            log_manual "This prevents runtime changes to audit configuration."
+            log_manual "=============================================="
+            current="Manual configuration required"
+            status="MANUAL"
+            ((MANUAL_CHECKS++))
+        fi
+    fi
+
+    print_check_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
+    [[ "$MODE" == "scan" ]] && save_scan_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
+    [[ "$MODE" == "fix" && "$status" == "MANUAL" ]] && save_fix_result "$policy_id" "$policy_name" "$expected" "Not immutable" "$current" "MANUAL"
+}
+
+check_8_b_d_xxi() {
+    local policy_id="8.b.d.xxi"
+    local policy_name="Ensure the running and on disk configuration is the same"
+    local expected="Running audit rules match on-disk rules"
+    ((TOTAL_CHECKS++))
+
+    local current status
+    
+    # Get count of running rules
+    local running_count=$(auditctl -l 2>/dev/null | grep -v "^No rules" | grep -v "^AUDIT" | wc -l)
+    
+    # Get count of on-disk rules
+    local disk_count=$(grep -E "^-[aw]" /etc/audit/rules.d/*.rules 2>/dev/null | wc -l)
+    
+    # Compare if they are similar (allow some variance for system rules)
+    local diff=$((running_count - disk_count))
+    if [ ${diff#-} -le 5 ]; then
+        current="Synchronized (running: $running_count, disk: $disk_count)"
+        status="PASS"
+        ((PASSED_CHECKS++))
+        log_pass "Running and on-disk audit rules are synchronized"
+    else
+        current="Not synchronized (running: $running_count, disk: $disk_count)"
+        status="FAIL"
+        ((FAILED_CHECKS++))
+        log_error "Running audit rules don't match on-disk configuration"
+        
+        if [[ "$MODE" == "fix" ]]; then
+            augenrules --load >/dev/null 2>&1
+            sleep 2
+            local new_running=$(auditctl -l 2>/dev/null | grep -v "^No rules" | grep -v "^AUDIT" | wc -l)
+            current="Synchronized after reload (running: $new_running, disk: $disk_count)"
+            status="FIXED"
+            ((FIXED_CHECKS++))
+            log_fixed "Reloaded audit rules to synchronize"
+        fi
+    fi
+
+    print_check_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
+    [[ "$MODE" == "scan" ]] && save_scan_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
+    [[ "$MODE" == "fix" && "$status" == "FIXED" ]] && save_fix_result "$policy_id" "$policy_name" "$expected" "Not synchronized" "$current" "FIXED"
+}
+
+# ============================================================================
+# 8.b.e Configure auditd File Access
+# ============================================================================
+
+check_8_b_e_i() {
+    local policy_id="8.b.e.i"
+    local policy_name="Ensure audit log files mode is configured"
+    local expected="0600 or more restrictive"
+    ((TOTAL_CHECKS++))
+
+    local current status
+    local log_dir=$(grep "^log_file" /etc/audit/auditd.conf 2>/dev/null | awk '{print $3}' | xargs dirname)
+    log_dir="${log_dir:-/var/log/audit}"
+    
+    if [ -d "$log_dir" ]; then
+        local bad_perms=$(find "$log_dir" -type f -name "audit.log*" ! -perm 0600 2>/dev/null | wc -l)
+        
+        if [ "$bad_perms" -eq 0 ]; then
+            current="0600 (properly configured)"
+            status="PASS"
+            ((PASSED_CHECKS++))
+            log_pass "Audit log files have correct permissions"
+        else
+            current="$bad_perms files with incorrect permissions"
+            status="FAIL"
+            ((FAILED_CHECKS++))
+            log_error "Audit log files have incorrect permissions"
+            
+            if [[ "$MODE" == "fix" ]]; then
+                find "$log_dir" -type f -name "audit.log*" -exec chmod 0600 {} \; 2>/dev/null
+                current="Fixed to 0600"
+                status="FIXED"
+                ((FIXED_CHECKS++))
+                log_fixed "Fixed audit log file permissions to 0600"
+            fi
+        fi
+    else
+        current="Audit log directory not found"
+        status="FAIL"
+        ((FAILED_CHECKS++))
+    fi
+
+    print_check_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
+    [[ "$MODE" == "scan" ]] && save_scan_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
+    [[ "$MODE" == "fix" && "$status" == "FIXED" ]] && save_fix_result "$policy_id" "$policy_name" "$expected" "Incorrect permissions" "$current" "FIXED"
+}
+
+check_8_b_e_ii() {
+    local policy_id="8.b.e.ii"
+    local policy_name="Ensure audit log files owner is configured"
+    local expected="Owner: root"
+    ((TOTAL_CHECKS++))
+
+    local current status
+    local log_dir=$(grep "^log_file" /etc/audit/auditd.conf 2>/dev/null | awk '{print $3}' | xargs dirname)
+    log_dir="${log_dir:-/var/log/audit}"
+    
+    if [ -d "$log_dir" ]; then
+        local bad_owner=$(find "$log_dir" -type f -name "audit.log*" ! -user root 2>/dev/null | wc -l)
+        
+        if [ "$bad_owner" -eq 0 ]; then
+            current="root (properly configured)"
+            status="PASS"
+            ((PASSED_CHECKS++))
+            log_pass "Audit log files owned by root"
+        else
+            current="$bad_owner files with incorrect owner"
+            status="FAIL"
+            ((FAILED_CHECKS++))
+            log_error "Audit log files not owned by root"
+            
+            if [[ "$MODE" == "fix" ]]; then
+                find "$log_dir" -type f -name "audit.log*" -exec chown root {} \; 2>/dev/null
+                current="Fixed to root"
+                status="FIXED"
+                ((FIXED_CHECKS++))
+                log_fixed "Fixed audit log file ownership to root"
+            fi
+        fi
+    else
+        current="Audit log directory not found"
+        status="FAIL"
+        ((FAILED_CHECKS++))
+    fi
+
+    print_check_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
+    [[ "$MODE" == "scan" ]] && save_scan_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
+    [[ "$MODE" == "fix" && "$status" == "FIXED" ]] && save_fix_result "$policy_id" "$policy_name" "$expected" "Incorrect owner" "$current" "FIXED"
+}
+
+check_8_b_e_iii() {
+    local policy_id="8.b.e.iii"
+    local policy_name="Ensure audit log files group owner is configured"
+    local expected="Group: root"
+    ((TOTAL_CHECKS++))
+
+    local current status
+    local log_dir=$(grep "^log_file" /etc/audit/auditd.conf 2>/dev/null | awk '{print $3}' | xargs dirname)
+    log_dir="${log_dir:-/var/log/audit}"
+    
+    if [ -d "$log_dir" ]; then
+        local bad_group=$(find "$log_dir" -type f -name "audit.log*" ! -group root 2>/dev/null | wc -l)
+        
+        if [ "$bad_group" -eq 0 ]; then
+            current="root (properly configured)"
+            status="PASS"
+            ((PASSED_CHECKS++))
+            log_pass "Audit log files group owned by root"
+        else
+            current="$bad_group files with incorrect group"
+            status="FAIL"
+            ((FAILED_CHECKS++))
+            log_error "Audit log files not group owned by root"
+            
+            if [[ "$MODE" == "fix" ]]; then
+                find "$log_dir" -type f -name "audit.log*" -exec chgrp root {} \; 2>/dev/null
+                current="Fixed to root"
+                status="FIXED"
+                ((FIXED_CHECKS++))
+                log_fixed "Fixed audit log file group ownership to root"
+            fi
+        fi
+    else
+        current="Audit log directory not found"
+        status="FAIL"
+        ((FAILED_CHECKS++))
+    fi
+
+    print_check_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
+    [[ "$MODE" == "scan" ]] && save_scan_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
+    [[ "$MODE" == "fix" && "$status" == "FIXED" ]] && save_fix_result "$policy_id" "$policy_name" "$expected" "Incorrect group" "$current" "FIXED"
+}
+
+check_8_b_e_iv() {
+    local policy_id="8.b.e.iv"
+    local policy_name="Ensure the audit log file directory mode is configured"
+    local expected="0750 or more restrictive"
+    ((TOTAL_CHECKS++))
+
+    local current status
+    local log_dir=$(grep "^log_file" /etc/audit/auditd.conf 2>/dev/null | awk '{print $3}' | xargs dirname)
+    log_dir="${log_dir:-/var/log/audit}"
+    
+    if [ -d "$log_dir" ]; then
+        local dir_perms=$(stat -c "%a" "$log_dir" 2>/dev/null)
+        
+        # Check if permissions are 0750 or more restrictive (no world/group write)
+        if [ "$dir_perms" = "750" ] || [ "$dir_perms" = "700" ]; then
+            current="$dir_perms (properly configured)"
+            status="PASS"
+            ((PASSED_CHECKS++))
+            log_pass "Audit log directory has correct permissions"
+        else
+            current="$dir_perms (too permissive)"
+            status="FAIL"
+            ((FAILED_CHECKS++))
+            log_error "Audit log directory permissions too permissive"
+            
+            if [[ "$MODE" == "fix" ]]; then
+                chmod 0750 "$log_dir" 2>/dev/null
+                current="0750 (fixed)"
+                status="FIXED"
+                ((FIXED_CHECKS++))
+                log_fixed "Fixed audit log directory permissions to 0750"
+            fi
+        fi
+    else
+        current="Audit log directory not found"
+        status="FAIL"
+        ((FAILED_CHECKS++))
+    fi
+
+    print_check_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
+    [[ "$MODE" == "scan" ]] && save_scan_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
+    [[ "$MODE" == "fix" && "$status" == "FIXED" ]] && save_fix_result "$policy_id" "$policy_name" "$expected" "$dir_perms" "$current" "FIXED"
+}
+
+check_8_b_e_v() {
+    local policy_id="8.b.e.v"
+    local policy_name="Ensure audit configuration files mode is configured"
+    local expected="0640 or more restrictive"
+    ((TOTAL_CHECKS++))
+
+    local current status
+    local bad_perms=$(find /etc/audit -type f \( -name "*.conf" -o -name "*.rules" \) ! -perm 0640 ! -perm 0600 2>/dev/null | wc -l)
+    
+    if [ "$bad_perms" -eq 0 ]; then
+        current="0640 or more restrictive (properly configured)"
+        status="PASS"
+        ((PASSED_CHECKS++))
+        log_pass "Audit configuration files have correct permissions"
+    else
+        current="$bad_perms files with incorrect permissions"
+        status="FAIL"
+        ((FAILED_CHECKS++))
+        log_error "Audit configuration files have incorrect permissions"
+        
+        if [[ "$MODE" == "fix" ]]; then
+            find /etc/audit -type f \( -name "*.conf" -o -name "*.rules" \) -exec chmod 0640 {} \; 2>/dev/null
+            current="Fixed to 0640"
+            status="FIXED"
+            ((FIXED_CHECKS++))
+            log_fixed "Fixed audit configuration file permissions to 0640"
+        fi
+    fi
+
+    print_check_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
+    [[ "$MODE" == "scan" ]] && save_scan_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
+    [[ "$MODE" == "fix" && "$status" == "FIXED" ]] && save_fix_result "$policy_id" "$policy_name" "$expected" "Incorrect permissions" "$current" "FIXED"
+}
+
+check_8_b_e_vi() {
+    local policy_id="8.b.e.vi"
+    local policy_name="Ensure audit configuration files owner is configured"
+    local expected="Owner: root"
+    ((TOTAL_CHECKS++))
+
+    local current status
+    local bad_owner=$(find /etc/audit -type f \( -name "*.conf" -o -name "*.rules" \) ! -user root 2>/dev/null | wc -l)
+    
+    if [ "$bad_owner" -eq 0 ]; then
+        current="root (properly configured)"
+        status="PASS"
+        ((PASSED_CHECKS++))
+        log_pass "Audit configuration files owned by root"
+    else
+        current="$bad_owner files with incorrect owner"
+        status="FAIL"
+        ((FAILED_CHECKS++))
+        log_error "Audit configuration files not owned by root"
+        
+        if [[ "$MODE" == "fix" ]]; then
+            find /etc/audit -type f \( -name "*.conf" -o -name "*.rules" \) -exec chown root {} \; 2>/dev/null
+            current="Fixed to root"
+            status="FIXED"
+            ((FIXED_CHECKS++))
+            log_fixed "Fixed audit configuration file ownership to root"
+        fi
+    fi
+
+    print_check_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
+    [[ "$MODE" == "scan" ]] && save_scan_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
+    [[ "$MODE" == "fix" && "$status" == "FIXED" ]] && save_fix_result "$policy_id" "$policy_name" "$expected" "Incorrect owner" "$current" "FIXED"
+}
+
+check_8_b_e_vii() {
+    local policy_id="8.b.e.vii"
+    local policy_name="Ensure audit configuration files group owner is configured"
+    local expected="Group: root"
+    ((TOTAL_CHECKS++))
+
+    local current status
+    local bad_group=$(find /etc/audit -type f \( -name "*.conf" -o -name "*.rules" \) ! -group root 2>/dev/null | wc -l)
+    
+    if [ "$bad_group" -eq 0 ]; then
+        current="root (properly configured)"
+        status="PASS"
+        ((PASSED_CHECKS++))
+        log_pass "Audit configuration files group owned by root"
+    else
+        current="$bad_group files with incorrect group"
+        status="FAIL"
+        ((FAILED_CHECKS++))
+        log_error "Audit configuration files not group owned by root"
+        
+        if [[ "$MODE" == "fix" ]]; then
+            find /etc/audit -type f \( -name "*.conf" -o -name "*.rules" \) -exec chgrp root {} \; 2>/dev/null
+            current="Fixed to root"
+            status="FIXED"
+            ((FIXED_CHECKS++))
+            log_fixed "Fixed audit configuration file group ownership to root"
+        fi
+    fi
+
+    print_check_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
+    [[ "$MODE" == "scan" ]] && save_scan_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
+    [[ "$MODE" == "fix" && "$status" == "FIXED" ]] && save_fix_result "$policy_id" "$policy_name" "$expected" "Incorrect group" "$current" "FIXED"
+}
+
+check_8_b_e_viii() {
+    local policy_id="8.b.e.viii"
+    local policy_name="Ensure audit tools mode is configured"
+    local expected="0755 or more restrictive"
+    ((TOTAL_CHECKS++))
+
+    local current status
+    local tools=("/sbin/auditctl" "/sbin/aureport" "/sbin/ausearch" "/sbin/autrace" "/sbin/auditd" "/sbin/augenrules")
+    local bad_perms=0
+    
+    for tool in "${tools[@]}"; do
+        if [ -f "$tool" ]; then
+            local perms=$(stat -c "%a" "$tool" 2>/dev/null)
+            if [ "$perms" != "755" ] && [ "$perms" != "750" ] && [ "$perms" != "700" ]; then
+                ((bad_perms++))
+            fi
+        fi
+    done
+    
+    if [ "$bad_perms" -eq 0 ]; then
+        current="0755 or more restrictive (properly configured)"
+        status="PASS"
+        ((PASSED_CHECKS++))
+        log_pass "Audit tools have correct permissions"
+    else
+        current="$bad_perms tools with incorrect permissions"
+        status="FAIL"
+        ((FAILED_CHECKS++))
+        log_error "Audit tools have incorrect permissions"
+        
+        if [[ "$MODE" == "fix" ]]; then
+            for tool in "${tools[@]}"; do
+                if [ -f "$tool" ]; then
+                    chmod 0755 "$tool" 2>/dev/null
+                fi
+            done
+            current="Fixed to 0755"
+            status="FIXED"
+            ((FIXED_CHECKS++))
+            log_fixed "Fixed audit tools permissions to 0755"
+        fi
+    fi
+
+    print_check_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
+    [[ "$MODE" == "scan" ]] && save_scan_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
+    [[ "$MODE" == "fix" && "$status" == "FIXED" ]] && save_fix_result "$policy_id" "$policy_name" "$expected" "Incorrect permissions" "$current" "FIXED"
+}
+
+check_8_b_e_ix() {
+    local policy_id="8.b.e.ix"
+    local policy_name="Ensure audit tools owner is configured"
+    local expected="Owner: root"
+    ((TOTAL_CHECKS++))
+
+    local current status
+    local tools=("/sbin/auditctl" "/sbin/aureport" "/sbin/ausearch" "/sbin/autrace" "/sbin/auditd" "/sbin/augenrules")
+    local bad_owner=0
+    
+    for tool in "${tools[@]}"; do
+        if [ -f "$tool" ]; then
+            local owner=$(stat -c "%U" "$tool" 2>/dev/null)
+            if [ "$owner" != "root" ]; then
+                ((bad_owner++))
+            fi
+        fi
+    done
+    
+    if [ "$bad_owner" -eq 0 ]; then
+        current="root (properly configured)"
+        status="PASS"
+        ((PASSED_CHECKS++))
+        log_pass "Audit tools owned by root"
+    else
+        current="$bad_owner tools with incorrect owner"
+        status="FAIL"
+        ((FAILED_CHECKS++))
+        log_error "Audit tools not owned by root"
+        
+        if [[ "$MODE" == "fix" ]]; then
+            for tool in "${tools[@]}"; do
+                if [ -f "$tool" ]; then
+                    chown root "$tool" 2>/dev/null
+                fi
+            done
+            current="Fixed to root"
+            status="FIXED"
+            ((FIXED_CHECKS++))
+            log_fixed "Fixed audit tools ownership to root"
+        fi
+    fi
+
+    print_check_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
+    [[ "$MODE" == "scan" ]] && save_scan_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
+    [[ "$MODE" == "fix" && "$status" == "FIXED" ]] && save_fix_result "$policy_id" "$policy_name" "$expected" "Incorrect owner" "$current" "FIXED"
+}
+
+check_8_b_e_x() {
+    local policy_id="8.b.e.x"
+    local policy_name="Ensure audit tools group owner is configured"
+    local expected="Group: root"
+    ((TOTAL_CHECKS++))
+
+    local current status
+    local tools=("/sbin/auditctl" "/sbin/aureport" "/sbin/ausearch" "/sbin/autrace" "/sbin/auditd" "/sbin/augenrules")
+    local bad_group=0
+    
+    for tool in "${tools[@]}"; do
+        if [ -f "$tool" ]; then
+            local group=$(stat -c "%G" "$tool" 2>/dev/null)
+            if [ "$group" != "root" ]; then
+                ((bad_group++))
+            fi
+        fi
+    done
+    
+    if [ "$bad_group" -eq 0 ]; then
+        current="root (properly configured)"
+        status="PASS"
+        ((PASSED_CHECKS++))
+        log_pass "Audit tools group owned by root"
+    else
+        current="$bad_group tools with incorrect group"
+        status="FAIL"
+        ((FAILED_CHECKS++))
+        log_error "Audit tools not group owned by root"
+        
+        if [[ "$MODE" == "fix" ]]; then
+            for tool in "${tools[@]}"; do
+                if [ -f "$tool" ]; then
+                    chgrp root "$tool" 2>/dev/null
+                fi
+            done
+            current="Fixed to root"
+            status="FIXED"
+            ((FIXED_CHECKS++))
+            log_fixed "Fixed audit tools group ownership to root"
+        fi
+    fi
+
+    print_check_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
+    [[ "$MODE" == "scan" ]] && save_scan_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
+    [[ "$MODE" == "fix" && "$status" == "FIXED" ]] && save_fix_result "$policy_id" "$policy_name" "$expected" "Incorrect group" "$current" "FIXED"
+}
+
+# ============================================================================
+# 8.b.f Configure Integrity Checking
+# ============================================================================
+
+check_8_b_f_i() {
+    local policy_id="8.b.f.i"
+    local policy_name="Ensure AIDE is installed"
+    local expected="AIDE installed"
+    ((TOTAL_CHECKS++))
+
+    local current status
+    if dpkg -l | grep -q "^ii.*aide\s"; then
+        current="Installed"
+        status="PASS"
+        ((PASSED_CHECKS++))
+        log_pass "AIDE is installed"
+    else
+        current="Not installed"
+        status="FAIL"
+        ((FAILED_CHECKS++))
+        log_error "AIDE is not installed"
+        
+        if [[ "$MODE" == "fix" ]]; then
+            apt-get update -y >/dev/null 2>&1
+            apt-get install -y aide aide-common >/dev/null 2>&1
+            
+            if dpkg -l | grep -q "^ii.*aide\s"; then
+                log_info "Initializing AIDE database (this may take several minutes)..."
+                aideinit >/dev/null 2>&1
+                
+                if [ -f /var/lib/aide/aide.db.new ]; then
+                    mv /var/lib/aide/aide.db.new /var/lib/aide/aide.db 2>/dev/null
+                    current="Installed and initialized"
+                    status="FIXED"
+                    ((FIXED_CHECKS++))
+                    log_fixed "Installed and initialized AIDE"
+                else
+                    current="Installed but initialization failed"
+                    status="MANUAL"
+                    ((MANUAL_CHECKS++))
+                    log_manual "AIDE installed but needs manual initialization: sudo aideinit"
+                fi
+            else
+                current="Installation failed"
+                status="FAIL"
+                log_error "Failed to install AIDE"
+            fi
+        fi
+    fi
+
+    print_check_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
+    [[ "$MODE" == "scan" ]] && save_scan_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
+    [[ "$MODE" == "fix" ]] && save_fix_result "$policy_id" "$policy_name" "$expected" "Not installed" "$current" "$status"
+}
+
+check_8_b_f_ii() {
+    local policy_id="8.b.f.ii"
+    local policy_name="Ensure filesystem integrity is regularly checked"
+    local expected="AIDE check scheduled (cron/systemd)"
+    ((TOTAL_CHECKS++))
+
+    local current status
+    
+    # Check for cron job
+    local has_cron=$(grep -r "aide" /etc/cron* /etc/crontab 2>/dev/null | grep -v "^#" | wc -l)
+    
+    # Check for systemd timer
+    local has_timer=0
+    if systemctl list-timers 2>/dev/null | grep -q "aide"; then
+        has_timer=1
+    fi
+    
+    if [ "$has_cron" -gt 0 ] || [ "$has_timer" -gt 0 ]; then
+        current="Scheduled (cron: $has_cron, timer: $has_timer)"
+        status="PASS"
+        ((PASSED_CHECKS++))
+        log_pass "AIDE filesystem integrity checks are scheduled"
+    else
+        current="Not scheduled"
+        status="FAIL"
+        ((FAILED_CHECKS++))
+        log_error "AIDE filesystem integrity checks not scheduled"
+        
+        if [[ "$MODE" == "fix" ]]; then
+            if ! command -v aide >/dev/null 2>&1; then
+                log_warn "AIDE not installed, skipping cron configuration"
+                current="AIDE not installed"
+                status="FAIL"
+            else
+                # Create daily cron job
+                cat > /etc/cron.daily/aide << 'EOFAIDE'
+#!/bin/bash
+# AIDE filesystem integrity check
+/usr/bin/aide --check | mail -s "AIDE Integrity Check" root
+EOFAIDE
+                chmod 0755 /etc/cron.daily/aide 2>/dev/null
+                
+                current="Scheduled (daily cron job created)"
+                status="FIXED"
+                ((FIXED_CHECKS++))
+                log_fixed "Created daily AIDE integrity check cron job"
+            fi
+        fi
+    fi
+
+    print_check_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
+    [[ "$MODE" == "scan" ]] && save_scan_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
+    [[ "$MODE" == "fix" && "$status" == "FIXED" ]] && save_fix_result "$policy_id" "$policy_name" "$expected" "Not scheduled" "$current" "FIXED"
+}
+
+check_8_b_f_iii() {
+    local policy_id="8.b.f.iii"
+    local policy_name="Ensure cryptographic mechanisms are used to protect the integrity of audit tools"
+    local expected="AIDE configured to monitor audit tools"
+    ((TOTAL_CHECKS++))
+
+    local current status
+    
+    if ! command -v aide >/dev/null 2>&1; then
+        current="AIDE not installed"
+        status="FAIL"
+        ((FAILED_CHECKS++))
+        log_error "AIDE not installed - cannot protect audit tools"
+    else
+        # Check if audit tools are in AIDE configuration
+        local aide_conf="/etc/aide/aide.conf"
+        local has_audit_tools=$(grep -E "/sbin/audit" "$aide_conf" 2>/dev/null | grep -v "^#" | wc -l)
+        
+        if [ "$has_audit_tools" -gt 0 ]; then
+            current="Configured (audit tools monitored by AIDE)"
+            status="PASS"
+            ((PASSED_CHECKS++))
+            log_pass "AIDE configured to monitor audit tools"
+        else
+            current="Not configured"
+            status="FAIL"
+            ((FAILED_CHECKS++))
+            log_error "AIDE not configured to monitor audit tools"
+            
+            if [[ "$MODE" == "fix" ]]; then
+                if [ -f "$aide_conf" ]; then
+                    cp "$aide_conf" "$BACKUP_DIR/aide.conf.$(date +%Y%m%d_%H%M%S)" 2>/dev/null
+                    
+                    # Add audit tools monitoring to AIDE config
+                    cat >> "$aide_conf" << 'EOFAIDE'
+
+# Audit Tools Integrity
+/sbin/auditctl p+i+n+u+g+s+b+acl+xattrs+sha512
+/sbin/auditd p+i+n+u+g+s+b+acl+xattrs+sha512
+/sbin/ausearch p+i+n+u+g+s+b+acl+xattrs+sha512
+/sbin/aureport p+i+n+u+g+s+b+acl+xattrs+sha512
+/sbin/autrace p+i+n+u+g+s+b+acl+xattrs+sha512
+/sbin/augenrules p+i+n+u+g+s+b+acl+xattrs+sha512
+EOFAIDE
+                    
+                    # Update AIDE database
+                    log_info "Updating AIDE database (this may take time)..."
+                    aide --update >/dev/null 2>&1
+                    
+                    if [ -f /var/lib/aide/aide.db.new ]; then
+                        mv /var/lib/aide/aide.db.new /var/lib/aide/aide.db 2>/dev/null
+                    fi
+                    
+                    current="Configured and database updated"
+                    status="FIXED"
+                    ((FIXED_CHECKS++))
+                    log_fixed "Configured AIDE to monitor audit tools"
+                else
+                    current="AIDE config file not found"
+                    status="FAIL"
+                fi
+            fi
+        fi
+    fi
+
+    print_check_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
+    [[ "$MODE" == "scan" ]] && save_scan_result "$policy_id" "$policy_name" "$expected" "$current" "$status"
+    [[ "$MODE" == "fix" && "$status" == "FIXED" ]] && save_fix_result "$policy_id" "$policy_name" "$expected" "Not configured" "$current" "FIXED"
+}
+
+# ============================================================================
+# Main Execution Function - Add to your existing main() function
+# ============================================================================
+
+run_all_checks() {
+    echo "=============================================="
+    echo "Logging and Auditing Hardening - Part 3"
+    echo "Mode: $MODE"
+    echo "=============================================="
+    echo ""
+
+    # Run Part 3 checks
+    check_8_b_d_xx
+    check_8_b_d_xxi
+    
+    # 8.b.e - Configure auditd File Access
+    check_8_b_e_i
+    check_8_b_e_ii
+    check_8_b_e_iii
+    check_8_b_e_iv
+    check_8_b_e_v
+    check_8_b_e_vi
+    check_8_b_e_vii
+    check_8_b_e_viii
+    check_8_b_e_ix
+    check_8_b_e_x
+    
+    # 8.b.f - Configure Integrity Checking
+    check_8_b_f_i
+    check_8_b_f_ii
+    check_8_b_f_iii
+}
+
+# ============================================================================
+# Summary Report
+# ============================================================================
+
+print_summary() {
+    echo ""
+    echo "=============================================="
+    echo "LOGGING AND AUDITING HARDENING SUMMARY"
+    echo "=============================================="
+    echo -e "Total Checks    : $TOTAL_CHECKS"
+    echo -e "${GREEN}Passed Checks${NC}   : $PASSED_CHECKS"
+    echo -e "${RED}Failed Checks${NC}   : $FAILED_CHECKS"
+    echo -e "${BLUE}Fixed Checks${NC}    : $FIXED_CHECKS"
+    echo -e "${YELLOW}Manual Checks${NC}   : $MANUAL_CHECKS"
+    echo "=============================================="
+    
+    if [ "$MANUAL_CHECKS" -gt 0 ]; then
+        echo ""
+        echo -e "${YELLOW}ATTENTION:${NC} $MANUAL_CHECKS checks require manual intervention."
+        echo "Review the MANUAL messages above for instructions."
+    fi
+    
+    if [ "$FAILED_CHECKS" -gt 0 ] && [ "$MODE" == "scan" ]; then
+        echo ""
+        echo -e "${YELLOW}TIP:${NC} Run with 'fix' mode to automatically fix issues:"
+        echo "  sudo $0 fix"
+    fi
+    echo ""
+}
+
+# ============================================================================
+# Execute if run as main script
+# ============================================================================
+
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    # Check for root
+    if [ "$EUID" -ne 0 ]; then
+        echo "Please run as root or with sudo"
+        exit 1
+    fi
+    
+    init_database
+    run_all_checks
+    print_summary
+fi
