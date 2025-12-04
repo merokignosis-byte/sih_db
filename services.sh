@@ -120,14 +120,29 @@ print_check_result() {
     local expected="$3"
     local current="$4"
     local status="$5"
-    
+
+    # Define colors
+    local GREEN="\033[0;32m"
+    local RED="\033[0;31m"
+    local YELLOW="\033[1;33m"
+    local NC="\033[0m"  # No Color
+
+    # Choose color based on status
+    local color
+    case "$status" in
+        PASS) color="$GREEN" ;;
+        FAIL) color="$RED" ;;
+        WARN) color="$YELLOW" ;;
+        *) color="$NC" ;;
+    esac
+
     echo "=============================================="
     echo "Module Name    : $MODULE_NAME"
     echo "Policy ID      : $policy_id"
     echo "Policy Name    : $policy_name"
     echo "Expected Value : $expected"
     echo "Current Value  : $current"
-    echo "Status         : $status"
+    echo -e "Status         : ${color}$status${NC}"
     echo "=============================================="
 }
 
@@ -774,8 +789,7 @@ check_cron_permissions() {
     if [ "$MODE" = "scan" ]; then
         local status="FAIL"
         local expected="$expected_perms root:root"
-        local
-        current="unknown"
+        local current="unknown"
         
         if [ -e "$file" ]; then
             local perms=$(stat -c "%a" "$file" 2>/dev/null)
@@ -1352,22 +1366,29 @@ main() {
     check_sudo_log_file
     
     # Print summary
-    echo ""
-    log_info "========================================"
-    log_info "Summary for $MODULE_NAME Module"
-    log_info "========================================"
-    log_info "Total Checks: $TOTAL_CHECKS"
-    
-    if [ "$MODE" = "scan" ]; then
-        log_pass "Passed: $PASSED_CHECKS"
-        log_error "Failed: $FAILED_CHECKS"
-    elif [ "$MODE" = "fix" ]; then
-        log_fixed "Fixed: $FIXED_CHECKS"
-        log_skip "Skipped (Already Compliant): $SKIPPED_CHECKS"
-        log_manual "Manual: $MANUAL_CHECKS"
-    fi
-    
-    log_info "========================================"
+    GREEN="\033[0;32m"
+    RED="\033[0;31m"
+    YELLOW="\033[1;33m"
+    BLUE="\033[0;34m"
+    NC="\033[0m"
+
+	echo ""
+	echo "========================================"
+	echo "Summary for $MODULE_NAME Module"
+	echo "========================================"
+	echo "Total Checks: $TOTAL_CHECKS"
+
+	if [ "$MODE" = "scan" ]; then
+	    echo -e "Passed: ${GREEN}$PASSED_CHECKS${NC}"
+	    echo -e "Failed: ${RED}$FAILED_CHECKS${NC}"
+	elif [ "$MODE" = "fix" ]; then
+	    echo -e "Fixed: ${GREEN}$FIXED_CHECKS${NC}"
+	    echo -e "Skipped (Already Compliant): ${YELLOW}$SKIPPED_CHECKS${NC}"
+	    echo -e "Manual: ${BLUE}$MANUAL_CHECKS${NC}"
+	fi
+
+	echo "========================================"
+
 }
 
 # Run main function

@@ -4,7 +4,7 @@
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DB_PATH="$SCRIPT_DIR/../hardening.db"
-BACKUP_DIR="$SCRIPT_DIR/backups/firewall"
+BACKUP_DIR="$SCRIPT_DIR/../backups/firewall"
 
 mkdir -p "$BACKUP_DIR"
 
