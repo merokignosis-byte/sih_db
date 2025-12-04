@@ -1,7 +1,5 @@
 #!/bin/bash
-# Network Hardening Script
-# Module: Network
-# Supports: scan, fix, rollback modes
+
 
 MODE="${1:-scan}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
