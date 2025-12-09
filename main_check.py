@@ -59,7 +59,10 @@ COLOR_MANUAL = "#ff9800"
 COLOR_RUNNING = "#9c27b0"
 COLOR_NORMAL = "#212121"
 
-DB_FILE = "/home/kali/hardening.db"
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+PARENT_DIR = os.path.dirname(SCRIPT_DIR)
+DB_FILE = os.path.join(PARENT_DIR, "hardening.db")
 
 def run_command_stream(cmd, line_callback, done_callback=None, progress_callback=None):
     try:
