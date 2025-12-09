@@ -59,7 +59,10 @@ COLOR_MANUAL = "#ff9800"
 COLOR_RUNNING = "#9c27b0"
 COLOR_NORMAL = "#212121"
 
-DB_FILE = "/home/kali/hardening.db"
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+PARENT_DIR = os.path.dirname(SCRIPT_DIR)
+DB_FILE = os.path.join(PARENT_DIR, "hardening.db")
 
 def run_command_stream(cmd, line_callback, done_callback=None, progress_callback=None):
     try:
@@ -743,6 +746,8 @@ class HardeningApp:
         self.running_proc = False
         self.current_action = None
         self.filter_text = ""
+        self.selected_policies_mode = False  # Track if we're in selected policies mode
+        self.selected_policies = {}  # Store selected policies by module
 
         try:
             os.makedirs(os.path.dirname(DB_FILE), exist_ok=True)
@@ -782,6 +787,32 @@ class HardeningApp:
             b.bind("<Leave>", lambda e, b=b: b.configure(bg=SIDEBAR_COLOR))
             
             self.module_buttons.append(b)
+
+        # Add policy selector section
+        selector_frame = LabelFrame(self.left_frame, text=" POLICY SELECTOR ", font=("Segoe UI", 11, "bold"),
+                                   bg=SIDEBAR_COLOR, fg=TEXT_COLOR, relief=tk.FLAT, borderwidth=0)
+        selector_frame.pack(fill=tk.X, padx=10, pady=(10, 5))
+        
+        # Policy selector button
+        self.policy_selector_btn = tk.Button(selector_frame, text="🔧 Select Policies", width=20, height=1,
+                                           font=("Segoe UI", 9, "bold"),
+                                           bg="#9c27b0", fg="white",
+                                           relief=tk.RAISED, borderwidth=1,
+                                           command=self.open_policy_selector)
+        self.policy_selector_btn.pack(padx=10, pady=3)
+        self.policy_selector_btn.bind("<Enter>", lambda e, b=self.policy_selector_btn: b.configure(relief=tk.SUNKEN))
+        self.policy_selector_btn.bind("<Leave>", lambda e, b=self.policy_selector_btn: b.configure(relief=tk.RAISED))
+        
+        # Normal mode button (initially hidden)
+        self.normal_mode_btn = tk.Button(selector_frame, text="📋 Show All Policies", width=20, height=1,
+                                        font=("Segoe UI", 9),
+                                        bg="#4caf50", fg="white",
+                                        relief=tk.RAISED, borderwidth=1,
+                                        command=self.show_all_policies)
+        self.normal_mode_btn.pack(padx=10, pady=3)
+        self.normal_mode_btn.pack_forget()
+        self.normal_mode_btn.bind("<Enter>", lambda e, b=self.normal_mode_btn: b.configure(relief=tk.SUNKEN))
+        self.normal_mode_btn.bind("<Leave>", lambda e, b=self.normal_mode_btn: b.configure(relief=tk.RAISED))
 
         actions_frame = LabelFrame(self.left_frame, text=" ACTIONS ", font=("Segoe UI", 11, "bold"),
                                   bg=SIDEBAR_COLOR, fg=TEXT_COLOR, relief=tk.FLAT, borderwidth=0)
@@ -920,8 +951,9 @@ class HardeningApp:
         table_controls = tk.Frame(self.scan_frame, bg=BG_COLOR)
         table_controls.pack(fill=tk.X, padx=5, pady=(5, 0))
         
-        tk.Label(table_controls, text="Scan Results Table", bg=BG_COLOR, fg=TEXT_COLOR,
-                font=("Segoe UI", 10, "bold")).pack(side=tk.LEFT)
+        self.view_status_label = tk.Label(table_controls, text="Showing: All policies", bg=BG_COLOR, fg=TEXT_COLOR,
+                                         font=("Segoe UI", 10, "bold"))
+        self.view_status_label.pack(side=tk.LEFT)
         
         export_btn = tk.Button(table_controls, text="Export to Excel", width=12, height=1,
                               bg="#4caf50", fg="white", font=("Segoe UI", 9),
@@ -1088,28 +1120,42 @@ class HardeningApp:
         
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS scan_results (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    module_name TEXT NOT NULL,
+    policy_id TEXT NOT NULL,
+    policy_name TEXT NOT NULL,
+    expected_value TEXT NOT NULL,
+    current_value TEXT NOT NULL,
+    status TEXT NOT NULL,
+    scan_timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(module_name, policy_id)
+)
+        ''')
+        
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS selected_policies (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                module_name TEXT NOT NULL,
                 policy_id TEXT NOT NULL,
-                policy_name TEXT NOT NULL,
-                expected_value TEXT,
-                current_value TEXT,
-                status TEXT,
-                module_name TEXT,
-                scan_timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+                selected_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(module_name, policy_id)
             )
         ''')
         
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS fix_history (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                policy_id TEXT NOT NULL,
-                policy_name TEXT NOT NULL,
-                original_value TEXT,
-                current_value TEXT,
-                status TEXT,
-                module_name TEXT,
-                fix_timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    module_name TEXT NOT NULL,
+    policy_id TEXT NOT NULL,
+    policy_name TEXT NOT NULL,
+    expected_value TEXT NOT NULL,
+    original_value TEXT NOT NULL,
+    current_value TEXT NOT NULL,
+    status TEXT NOT NULL,
+    fix_timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+    rollback_executed TEXT DEFAULT 'NO',
+    UNIQUE(module_name, policy_id)
+)
         ''')
         
         cursor.execute('''
@@ -1191,26 +1237,56 @@ class HardeningApp:
                 self.append_console(f"[INFO] scan_results table doesn't exist yet. Run a scan first.")
                 return
             
-            # Get only latest results for each policy (based on timestamp)
-            cursor.execute("""
-                SELECT s1.policy_id, s1.policy_name, s1.expected_value, s1.current_value, s1.status 
-                FROM scan_results s1
-                INNER JOIN (
-                    SELECT policy_id, module_name, MAX(scan_timestamp) as max_timestamp
-                    FROM scan_results 
-                    WHERE module_name=?
-                    GROUP BY policy_id, module_name
-                ) s2 ON s1.policy_id = s2.policy_id 
-                    AND s1.module_name = s2.module_name 
-                    AND s1.scan_timestamp = s2.max_timestamp
-                WHERE s1.module_name=?
-                ORDER BY s1.policy_id
-            """, (module_name, module_name))
+            # Check if we have selected policies for this module
+            cursor.execute("SELECT policy_id FROM selected_policies WHERE module_name=?", (module_name,))
+            selected_policies = [row['policy_id'] for row in cursor.fetchall()]
             
+            if selected_policies and self.selected_policies_mode:
+                # Build query with selected policies filter
+                placeholders = ','.join(['?'] * len(selected_policies))
+                query = f"""
+                    SELECT s1.policy_id, s1.policy_name, s1.expected_value, s1.current_value, s1.status 
+                    FROM scan_results s1
+                    INNER JOIN (
+                        SELECT policy_id, module_name, MAX(scan_timestamp) as max_timestamp
+                        FROM scan_results 
+                        WHERE module_name=?
+                        GROUP BY policy_id, module_name
+                    ) s2 ON s1.policy_id = s2.policy_id 
+                        AND s1.module_name = s2.module_name 
+                        AND s1.scan_timestamp = s2.max_timestamp
+                    WHERE s1.module_name=? AND s1.policy_id IN ({placeholders})
+                    ORDER BY s1.policy_id
+                """
+                params = [module_name, module_name] + selected_policies
+                self.view_status_label.config(text=f"Showing: {len(selected_policies)} selected policies")
+            else:
+                # Show all policies
+                query = """
+                    SELECT s1.policy_id, s1.policy_name, s1.expected_value, s1.current_value, s1.status 
+                    FROM scan_results s1
+                    INNER JOIN (
+                        SELECT policy_id, module_name, MAX(scan_timestamp) as max_timestamp
+                        FROM scan_results 
+                        WHERE module_name=?
+                        GROUP BY policy_id, module_name
+                    ) s2 ON s1.policy_id = s2.policy_id 
+                        AND s1.module_name = s2.module_name 
+                        AND s1.scan_timestamp = s2.max_timestamp
+                    WHERE s1.module_name=?
+                    ORDER BY s1.policy_id
+                """
+                params = [module_name, module_name]
+                self.view_status_label.config(text="Showing: All policies")
+            
+            cursor.execute(query, params)
             rows = cursor.fetchall()
             
             if not rows:
-                self.append_console(f"[INFO] No scan results found for {module_name}. Run a scan first.")
+                if selected_policies and self.selected_policies_mode:
+                    self.append_console(f"[INFO] No scan results found for selected policies in {module_name}. Run a scan first.")
+                else:
+                    self.append_console(f"[INFO] No scan results found for {module_name}. Run a scan first.")
                 return
             
             self.stats_vars["Total Policies"].set(str(len(rows)))
@@ -1286,6 +1362,206 @@ class HardeningApp:
                 
         except Exception as e:
             self.append_console(f"[ERROR] Failed to load fix history: {e}")
+
+    def open_policy_selector(self):
+        """Open dialog to select policies with checkboxes"""
+        if not self.conn:
+            messagebox.showerror("Error", "Database not connected")
+            return
+        
+        module_name = MODULES[self.current_module_index][0] if self.current_module_index < len(MODULES) else "Unknown"
+        
+        dialog = tk.Toplevel(self.root)
+        dialog.title(f"Policy Selector - {module_name}")
+        dialog.geometry("800x600")
+        dialog.configure(bg=BG_COLOR)
+        dialog.transient(self.root)
+        dialog.grab_set()
+        
+        # Header
+        header_frame = tk.Frame(dialog, bg=HEADER_COLOR)
+        header_frame.pack(fill=tk.X, pady=(0, 10))
+        tk.Label(header_frame, text=f"Select Policies for {module_name}", 
+                 fg="white", bg=HEADER_COLOR, font=("Segoe UI", 12, "bold")).pack(pady=10)
+        
+        # Instructions
+        info_frame = tk.Frame(dialog, bg=BG_COLOR)
+        info_frame.pack(fill=tk.X, padx=20, pady=(0, 10))
+        tk.Label(info_frame, text="✓ Check policies you want to display\n✗ Uncheck to hide from display\n\nNote: Scripts still run all policies", 
+                 bg=BG_COLOR, fg=TEXT_COLOR, font=("Segoe UI", 9), justify=tk.LEFT).pack(anchor="w")
+        
+        # Create main frame with scrollbar
+        main_frame = tk.Frame(dialog, bg=BG_COLOR)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
+        
+        # Create canvas and scrollbar
+        canvas = tk.Canvas(main_frame, bg=BG_COLOR, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(main_frame, orient="vertical", command=canvas.yview)
+        scrollable_frame = tk.Frame(canvas, bg=BG_COLOR)
+        
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+        
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        # Control buttons frame
+        control_frame = tk.Frame(scrollable_frame, bg=BG_COLOR)
+        control_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        select_all_btn = tk.Button(control_frame, text="Select All", width=12,
+                                  bg="#4caf50", fg="white", font=("Segoe UI", 9),
+                                  command=lambda: self.select_all_checkboxes(checkboxes, True))
+        select_all_btn.pack(side=tk.LEFT, padx=5)
+        
+        select_none_btn = tk.Button(control_frame, text="Select None", width=12,
+                                   bg="#f44336", fg="white", font=("Segoe UI", 9),
+                                   command=lambda: self.select_all_checkboxes(checkboxes, False))
+        select_none_btn.pack(side=tk.LEFT, padx=5)
+        
+        # Get current policies from database
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute("""
+                SELECT DISTINCT s1.policy_id, s1.policy_name
+                FROM scan_results s1
+                INNER JOIN (
+                    SELECT policy_id, module_name, MAX(scan_timestamp) as max_timestamp
+                    FROM scan_results 
+                    WHERE module_name=?
+                    GROUP BY policy_id, module_name
+                ) s2 ON s1.policy_id = s2.policy_id 
+                    AND s1.module_name = s2.module_name 
+                    AND s1.scan_timestamp = s2.max_timestamp
+                WHERE s1.module_name=?
+                ORDER BY s1.policy_id
+            """, (module_name, module_name))
+            
+            policies = cursor.fetchall()
+            
+            if not policies:
+                tk.Label(scrollable_frame, text="No policies found. Run a scan first.", 
+                        bg=BG_COLOR, fg=TEXT_COLOR, font=("Segoe UI", 10)).pack(pady=20)
+            else:
+                # Get currently selected policies
+                cursor.execute("SELECT policy_id FROM selected_policies WHERE module_name=?", (module_name,))
+                selected_ids = {row['policy_id'] for row in cursor.fetchall()}
+                
+                # Create checkboxes
+                checkboxes = {}
+                checkbox_frame = tk.Frame(scrollable_frame, bg=BG_COLOR)
+                checkbox_frame.pack(fill=tk.BOTH, expand=True)
+                
+                for policy in policies:
+                    policy_id = policy['policy_id']
+                    policy_name = policy['policy_name']
+                    
+                    var = tk.BooleanVar(value=(policy_id in selected_ids))
+                    
+                    cb_frame = tk.Frame(checkbox_frame, bg=BG_COLOR)
+                    cb_frame.pack(fill=tk.X, padx=5, pady=2)
+                    
+                    cb = tk.Checkbutton(cb_frame, text=f"{policy_id}: {policy_name}", 
+                                       variable=var, bg=BG_COLOR, fg=TEXT_COLOR,
+                                       font=("Segoe UI", 9), anchor="w")
+                    cb.pack(side=tk.LEFT, fill=tk.X, expand=True)
+                    
+                    checkboxes[policy_id] = var
+                
+                tk.Label(control_frame, text=f"Total: {len(policies)} policies", 
+                        bg=BG_COLOR, fg=TEXT_COLOR, font=("Segoe UI", 9)).pack(side=tk.RIGHT, padx=10)
+        
+        except Exception as e:
+            tk.Label(scrollable_frame, text=f"Error loading policies: {str(e)}", 
+                    bg=BG_COLOR, fg=COLOR_FAIL, font=("Segoe UI", 10)).pack(pady=20)
+            checkboxes = {}
+        
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Button frame at bottom
+        button_frame = tk.Frame(dialog, bg=BG_COLOR)
+        button_frame.pack(fill=tk.X, padx=20, pady=10)
+        
+        def save_selections():
+            try:
+                cursor = self.conn.cursor()
+                
+                # Clear existing selections for this module
+                cursor.execute("DELETE FROM selected_policies WHERE module_name=?", (module_name,))
+                
+                # Save new selections
+                selected_count = 0
+                for policy_id, var in checkboxes.items():
+                    if var.get():  # If checked
+                        cursor.execute("""
+                            INSERT INTO selected_policies (module_name, policy_id) 
+                            VALUES (?, ?)
+                        """, (module_name, policy_id))
+                        selected_count += 1
+                
+                self.conn.commit()
+                dialog.destroy()
+                
+                # Enable selected policies mode
+                self.selected_policies_mode = True
+                self.show_normal_mode_button()
+                
+                # Refresh current view
+                self.load_scan_results(module_name)
+                
+                if selected_count > 0:
+                    messagebox.showinfo("Success", f"{selected_count} policies selected for display!")
+                else:
+                    messagebox.showinfo("Info", "No policies selected. Showing all policies.")
+                    self.selected_policies_mode = False
+                    self.hide_normal_mode_button()
+                    self.load_scan_results(module_name)
+                
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to save selections: {str(e)}")
+        
+        save_btn = tk.Button(button_frame, text="Apply Selection", width=15,
+                            bg="#2196f3", fg="white", font=("Segoe UI", 10, "bold"),
+                            command=save_selections)
+        save_btn.pack(side=tk.LEFT, padx=5)
+        
+        cancel_btn = tk.Button(button_frame, text="Cancel", width=15,
+                              bg="#9e9e9e", fg="white", font=("Segoe UI", 10),
+                              command=dialog.destroy)
+        cancel_btn.pack(side=tk.RIGHT, padx=5)
+
+    def select_all_checkboxes(self, checkboxes, select=True):
+        """Select or deselect all checkboxes"""
+        for var in checkboxes.values():
+            var.set(select)
+
+    def show_all_policies(self):
+        """Return to showing all policies (normal mode)"""
+        if not self.selected_policies_mode:
+            return
+        
+        module_name = MODULES[self.current_module_index][0] if self.current_module_index < len(MODULES) else "Unknown"
+        
+        response = messagebox.askyesno("Show All Policies", 
+            f"Return to showing ALL policies for {module_name}?")
+        
+        if response:
+            self.selected_policies_mode = False
+            self.hide_normal_mode_button()
+            self.load_scan_results(module_name)
+
+    def show_normal_mode_button(self):
+        """Show the normal mode button"""
+        self.normal_mode_btn.pack(padx=10, pady=3)
+        self.policy_selector_btn.config(text="🔧 Change Selection")
+
+    def hide_normal_mode_button(self):
+        """Hide the normal mode button"""
+        self.normal_mode_btn.pack_forget()
+        self.policy_selector_btn.config(text="🔧 Select Policies")
 
     def filter_table(self, event=None):
         self.filter_text = self.search_var.get().strip()
@@ -1813,8 +2089,12 @@ Module:        {MODULES[self.current_module_index][0]}
         run_command_stream(cmd, on_line, on_done)
 
     def _set_buttons_state(self, state):
-        for w in [self.scan_btn, self.fix_btn, self.rollback_btn, self.pdf_btn, self.blockchain_btn]:
-            w.configure(state=state)
+        for w in [self.scan_btn, self.fix_btn, self.rollback_btn, self.pdf_btn, self.blockchain_btn,
+                  self.policy_selector_btn, self.normal_mode_btn]:
+            try:
+                w.configure(state=state)
+            except:
+                pass
 
     def export_to_excel(self):
         if not self.conn:
@@ -2135,6 +2415,8 @@ Features:
 • Search and Filter
 • Fix History Tracking
 • Compliance Dashboard
+• Policy Selection with Checkboxes
+• Toggle between Selected/All Policies
 
 Modules: {', '.join([m[0] for m in MODULES])}
 

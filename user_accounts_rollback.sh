@@ -56,7 +56,7 @@ try:
         FROM fix_history fh
         LEFT JOIN scan_results sr ON fh.policy_id = sr.policy_id 
             AND fh.module_name = sr.module_name
-        WHERE fh.module_name='User Accounts and Environment' 
+        WHERE fh.module_name='User Accounts' 
             AND fh.rollback_executed='NO'
             AND (fh.status='FIXED' OR fh.status='MANUAL')
         ORDER BY fh.policy_id
